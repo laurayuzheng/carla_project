@@ -95,12 +95,12 @@ class MapModel(pl.LightningModule):
 
         return out, (target_heatmap,)
 
-    def training_step(self, batch, batch_nb):
+    def training_step(self, batch, batch_nb): # img never used in map model
         img, topdown, points, target, actions, meta = batch
         out, (target_heatmap,) = self.forward(topdown, target, debug=True)
 
         alpha = torch.rand(out.shape).type_as(out)
-        between = alpha * out + (1-alpha) * points
+        between = alpha * out + (1-alpha) * points # Interpolate between predicted waypoints and ground truth waypoints
         out_cmd = self.controller(between)
 
         loss_point = torch.nn.functional.l1_loss(out, points, reduction='none').mean((1, 2))
