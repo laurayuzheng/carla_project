@@ -44,7 +44,7 @@ def get_weights(data, key='speed', bins=4):
     return class_weights[classes]
 
 
-def get_dataset(dataset_dir, is_train=True, batch_size=128, num_workers=4, sample_by='none', **kwargs):
+def get_dataset(dataset_dir, is_train=True, batch_size=128, num_workers=4, sample_by='none', use_cpu=False, **kwargs):
     data = list()
     transform = transforms.Compose([
         get_augmenter() if is_train else lambda x: x,
@@ -67,7 +67,7 @@ def get_dataset(dataset_dir, is_train=True, batch_size=128, num_workers=4, sampl
     sampler = torch.utils.data.sampler.WeightedRandomSampler(weights, len(weights))
     data = torch.utils.data.ConcatDataset(data)
 
-    return Wrap(data, sampler, batch_size, 1000 if is_train else 100, num_workers)
+    return Wrap(data, sampler, batch_size, 1000 if is_train else 100, num_workers, use_cpu)
 
 
 def get_augmenter():
@@ -195,7 +195,7 @@ class CarlaDataset(Dataset):
 
             points.append(target)
 
-        points = torch.FloatTensor(points)
+        points = torch.FloatTensor(np.array(points, dtype=np.float32))
         points = torch.clamp(points, 0, 256)
         points = (points / 256) * 2 - 1
 

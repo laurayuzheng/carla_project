@@ -94,12 +94,13 @@ def viz(batch, out, out_ctrl, target_cam, point_loss, ctrl_loss):
     return result
 
 
-class ImageModel(pl.LightningModule):
+class TrafficImageModel(pl.LightningModule):
     def __init__(self, hparams):
         super().__init__()
 
         self.hparams = hparams
         self.to_heatmap = ToHeatmap(hparams.heatmap_radius)
+        self.use_cpu = hparams.cpu
 
         # if teacher_path:
         #     self.teacher = MapModel.load_from_checkpoint(teacher_path)
@@ -265,10 +266,10 @@ class ImageModel(pl.LightningModule):
         return [optim], [scheduler]
 
     def train_dataloader(self):
-        return get_dataset(self.hparams.dataset_dir, True, self.hparams.batch_size, sample_by=self.hparams.sample_by)
+        return get_dataset(self.hparams.dataset_dir, True, self.hparams.batch_size, sample_by=self.hparams.sample_by, use_cpu=self.use_cpu)
 
     def val_dataloader(self):
-        return get_dataset(self.hparams.dataset_dir, False, self.hparams.batch_size, sample_by=self.hparams.sample_by)
+        return get_dataset(self.hparams.dataset_dir, False, self.hparams.batch_size, sample_by=self.hparams.sample_by, use_cpu=self.use_cpu)
 
     def state_dict(self):
         return {k: v for k, v in super().state_dict().items() if 'teacher' not in k}
@@ -285,12 +286,15 @@ def main(hparams):
     except:
         resume_from_checkpoint = None
 
-    model = ImageModel(hparams)
-    logger = WandbLogger(id=hparams.id, save_dir=str(hparams.save_dir), project='stage_2')
+    model = TrafficImageModel(hparams)
+    logger = WandbLogger(id=hparams.id, save_dir=str(hparams.save_dir), project='traffic_model')
     checkpoint_callback = ModelCheckpoint(hparams.save_dir, save_top_k=1)
 
     trainer = pl.Trainer(
-            gpus=-1, max_epochs=hparams.max_epochs,
+            # gpus=-1, 
+            gpus=None, 
+            accelerator="cpu",
+            max_epochs=hparams.max_epochs,
             resume_from_checkpoint=resume_from_checkpoint,
             logger=logger, checkpoint_callback=checkpoint_callback)
 
@@ -304,6 +308,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_epochs', type=int, default=50)
     parser.add_argument('--save_dir', type=pathlib.Path, default='checkpoints')
     parser.add_argument('--id', type=str, default=uuid.uuid4().hex)
+    parser.add_argument('--cpu', action='store_true', default=False)
 
     # parser.add_argument('--teacher_path', type=pathlib.Path, required=True)
 
