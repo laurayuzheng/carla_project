@@ -1,4 +1,4 @@
-import sys
+import sys, os
 
 from pathlib import Path
 
@@ -7,18 +7,25 @@ import tqdm
 import carla
 import cv2
 import pandas as pd
+import argparse
+import logging 
 
 from PIL import Image
 
-from .traffic_carla_env import TrafficCarlaEnv
+from .t_carla_env import TrafficCarlaEnv
 from .common import COLOR
+
+if 'SUMO_HOME' in os.environ:
+    sys.path.append(os.path.join(os.environ['SUMO_HOME'], 'tools'))
+else:
+    sys.exit("please declare environment variable 'SUMO_HOME'")
 
 
 EPISODE_LENGTH = 1000
 EPISODES = 10
 FRAME_SKIP = 5
 SAVE_PATH = Path('/scratch/2020_CARLA_challenge/data/traffic_data')
-DEBUG = True
+DEBUG = False
 
 
 def collect_episode(env, save_dir):
@@ -55,7 +62,7 @@ def collect_episode(env, save_dir):
 
         if DEBUG:
             cv2.imshow('rgb', cv2.cvtColor(np.hstack((rgb_left, rgb, rgb_right)), cv2.COLOR_BGR2RGB))
-            cv2.imshow('topdown', cv2.cvtColor(COLORS[topdown], cv2.COLOR_BGR2RGB))
+            cv2.imshow('topdown', cv2.cvtColor(COLOR[topdown], cv2.COLOR_BGR2RGB))
             cv2.waitKey(1)
 
         Image.fromarray(rgb_left).save(save_dir / 'rgb_left' / ('%04d.png' % index))
@@ -69,10 +76,65 @@ def collect_episode(env, save_dir):
 
 
 def main():
+    argparser = argparse.ArgumentParser(description=__doc__)
+    argparser.add_argument('--carla-host',
+                           metavar='H',
+                           default='127.0.0.1',
+                           help='IP of the carla host server (default: 127.0.0.1)')
+    argparser.add_argument('--carla-port',
+                           metavar='P',
+                           default=2000,
+                           type=int,
+                           help='TCP port to listen to (default: 2000)')
+    argparser.add_argument('--sumo-host',
+                           metavar='H',
+                           default=None,
+                           help='IP of the sumo host server (default: 127.0.0.1)')
+    argparser.add_argument('--sumo-port',
+                           metavar='P',
+                           default=None,
+                           type=int,
+                           help='TCP port to listen to (default: 8813)')
+    argparser.add_argument('--sumo-gui', action='store_true', help='run the gui version of sumo')
+    argparser.add_argument('--step-length',
+                           default=0.05,
+                           type=float,
+                           help='set fixed delta seconds (default: 0.05s)')
+    argparser.add_argument('--client-order',
+                           metavar='TRACI_CLIENT_ORDER',
+                           default=1,
+                           type=int,
+                           help='client order number for the co-simulation TraCI connection (default: 1)')
+    argparser.add_argument('--sync-vehicle-lights',
+                           action='store_true',
+                           help='synchronize vehicle lights state (default: False)')
+    argparser.add_argument('--sync-vehicle-color',
+                           action='store_true',
+                           help='synchronize vehicle color (default: False)')
+    argparser.add_argument('--sync-vehicle-all',
+                           action='store_true',
+                           help='synchronize all vehicle properties (default: False)')
+    argparser.add_argument('--tls-manager',
+                           type=str,
+                           choices=['none', 'sumo', 'carla'],
+                           help="select traffic light manager (default: none)",
+                           default='none')
+    argparser.add_argument('--debug', action='store_true', help='enable debug messages')
+    args = argparser.parse_args()
+
+    if args.sync_vehicle_all is True:
+        args.sync_vehicle_lights = True
+        args.sync_vehicle_color = True
+
+    if args.debug:
+        logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.DEBUG)
+    else:
+        logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
+
     np.random.seed(1337)
 
     for i in range(1, 8):
-        with TrafficCarlaEnv(town='Town0%s' % i) as env:
+        with TrafficCarlaEnv(args, town='Town0%s' % i) as env:
             for episode in range(EPISODES):
                 env.reset(
                         n_vehicles=np.random.choice([50, 100, 200]),

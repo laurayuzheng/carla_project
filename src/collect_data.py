@@ -17,8 +17,8 @@ from .common import COLOR
 EPISODE_LENGTH = 1000
 EPISODES = 10
 FRAME_SKIP = 5
-SAVE_PATH = Path('/home/bradyzhou/data/carla/topdown')
-DEBUG = True
+SAVE_PATH = Path('/scratch/2020_CARLA_challenge/data/test')
+DEBUG = False
 
 
 def collect_episode(env, save_dir):
