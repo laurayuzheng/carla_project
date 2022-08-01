@@ -445,7 +445,7 @@ class TrafficCarlaEnv(object):
         velocity = self._player.get_velocity()
 
         # self.synchronization.sumo.update_lane_states()
-        print(f"Player id: {self._player_sumo_id}")
+        # print(f"Player id: {self._player_sumo_id}")
 
         # Put here for speed (get() busy polls queue).
 
