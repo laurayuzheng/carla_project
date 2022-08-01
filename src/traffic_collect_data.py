@@ -12,7 +12,7 @@ import logging
 
 from PIL import Image
 
-from .t_carla_env import TrafficCarlaEnv
+from .t_carla_env import TrafficCarlaEnv, PRESET_WEATHERS, PRESET_WEATHERS_STRING
 from .common import COLOR
 
 if 'SUMO_HOME' in os.environ:
@@ -142,17 +142,19 @@ def main():
         logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
 
     np.random.seed(1337)
-
-    for i in [1,4,5]:
-        with TrafficCarlaEnv(args, town='Town0%s' % i) as env:
-            for episode in range(EPISODES):
-                env.reset(
-                        n_vehicles=np.random.choice([50, 100, 200]),
-                        n_pedestrians=np.random.choice([50, 100, 200]),
-                        seed=np.random.randint(0, 256))
-                env._player.set_autopilot(True)
-
-                collect_episode(env, SAVE_PATH / ('%03d_Town0%s' % (len(list(SAVE_PATH.glob('*'))), i)))
+    
+    for wi in [1, 3, 8, 10]:
+        for i in [1,4,5]:
+            with TrafficCarlaEnv(args, town='Town0%s' % i) as env:
+                for episode in range(EPISODES):
+                    weather_setting = PRESET_WEATHERS[wi]
+                    env.reset(
+                            weather=weather_setting,
+                            n_vehicles=np.random.choice([50, 100, 200]),
+                            n_pedestrians=np.random.choice([50, 100, 200]),
+                            seed=np.random.randint(0, 256))
+                    env._player.set_autopilot(True)
+                    collect_episode(env, SAVE_PATH / ('%03d_Town0%s_%s' % (len(list(SAVE_PATH.glob('*'))), i, PRESET_WEATHERS_STRING[wi])))
 
 
 if __name__ == '__main__':

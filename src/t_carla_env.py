@@ -42,6 +42,24 @@ PRESET_WEATHERS = {
     # 14: carla.WeatherParameters.SoftRainSunset,
 }
 
+PRESET_WEATHERS_STRING = {
+    1: "ClearNoon",
+    2: "CloudyNoon",
+    3: "WetNoon",
+    5: "MidRainyNoon",
+    # 4: WetCloudyNoon,
+    # 6: HardRainNoon,
+    # 7: SoftRainNoon,
+
+    8: "ClearSunset",
+    9: "CloudySunset",
+    10: "WetSunset",
+    12: "MidRainSunset",
+    # 11: WetCloudySunset,
+    # 13: HardRainSunset,
+    # 14: SoftRainSunset,
+}
+
 WEATHERS = list(PRESET_WEATHERS.values())
 VEHICLE_NAME = 'vehicle.lincoln.mkz2017'
 COLLISION_THRESHOLD = 20000
@@ -402,6 +420,23 @@ class TrafficCarlaEnv(object):
         self.synchronization = SimulationSynchronization(sumo_simulation, carla_simulation, args.tls_manager,
                                                 args.sync_vehicle_color, args.sync_vehicle_lights)
 
+        self.safe = args.safe 
+        self.number_of_vehicles = args.number_of_vehicles
+        self.npcs_initialized = False
+
+        self._initialize_npcs()
+
+    def _set_weather(self, weather_string):
+        if weather_string == 'random':
+            weather = np.random.choice(WEATHERS)
+        else:
+            weather = weather_string
+
+        self.weather = weather
+        self._world.set_weather(weather)
+
+    def _initialize_npcs(self):
+
         # ----------
         # Blueprints
         # ----------
@@ -412,7 +447,7 @@ class TrafficCarlaEnv(object):
         filterv = re.compile('vehicle.*')
         blueprints = list(filter(filterv.search, blueprints))
 
-        if args.safe:
+        if self.safe:
             blueprints = [
                 x for x in blueprints if vtypes[x]['vClass'] not in ('motorcycle', 'bicycle')
             ]
@@ -430,7 +465,7 @@ class TrafficCarlaEnv(object):
         # Spawns sumo NPC vehicles.
         sumo_edges = self.sumo_net.getEdges()
 
-        for i in range(args.number_of_vehicles):
+        for i in range(self.number_of_vehicles):
             type_id = random.choice(blueprints)
             vclass = vtypes[type_id]['vClass']
 
@@ -440,17 +475,9 @@ class TrafficCarlaEnv(object):
             traci.route.add('route_{}'.format(i), [edge.getID()])
             traci.vehicle.add('sumo_{}'.format(i), 'route_{}'.format(i), typeID=type_id)
 
+        self.npcs_initialized = True 
 
-    def _set_weather(self, weather_string):
-        if weather_string == 'random':
-            weather = np.random.choice(WEATHERS)
-        else:
-            weather = weather_string
-
-        self.weather = weather
-        self._world.set_weather(weather)
-
-    def reset(self, weather='random', n_vehicles=10, n_pedestrians=10, seed=0):
+    def reset(self, weather='random', n_vehicles=10, n_pedestrians=10, seed=0, ticks=10):
         is_ready = False
 
         while not is_ready:
@@ -458,6 +485,13 @@ class TrafficCarlaEnv(object):
 
             self.synchronization.reset()
             self._clean_up()
+
+            if self.npcs_initialized == False:
+                self._initialize_npcs()
+            
+            for _ in range(ticks):
+                self.step(warmup=True)
+
             self._spawn_player()
             self._setup_sensors()
 
@@ -468,27 +502,32 @@ class TrafficCarlaEnv(object):
             is_ready = self.ready()
 
     def _spawn_player(self):
-        vehicle_bp = np.random.choice(self._blueprints.filter(VEHICLE_NAME))
-        vehicle_bp.set_attribute('role_name', 'hero')
+        # vehicle_bp = np.random.choice(self._blueprints.filter(VEHICLE_NAME))
+        # vehicle_bp.set_attribute('role_name', 'hero')
 
-        spawn_point = np.random.choice(self._map.get_spawn_points())
-        self._player = self._world.spawn_actor(vehicle_bp, spawn_point)
+        # spawn_point = np.random.choice(self._map.get_spawn_points())
+        # self._player = self._world.spawn_actor(vehicle_bp, spawn_point)
+
+        sumo_id, carla_id = random.choice(list(self.synchronization.sumo2carla_ids.items()))
+        self._player = self._world.get_actor(carla_id) 
 
         self._actor_dict['player'].append(self._player)
+        self._player_sumo_id = sumo_id
         
         # Manually add the player to SUMO simulation so we can save the id
-        carla_id = self._player.id 
-        type_id = BridgeHelper.get_sumo_vtype(self._player)
-        color = self._player.attributes.get('color', None) 
-        if type_id is not None:
-            sumo_actor_id = self.synchronization.sumo.spawn_actor(type_id, color)
-            if sumo_actor_id != INVALID_ACTOR_ID:
-                self.synchronization.carla2sumo_ids[carla_id] = sumo_actor_id
-                self.synchronization.sumo.subscribe(sumo_actor_id)
+        # carla_id = self._player.id 
+        # type_id = BridgeHelper.get_sumo_vtype(self._player)
+        # color = self._player.attributes.get('color', None) 
+        # if type_id is not None:
+        #     sumo_actor_id = self.synchronization.sumo.spawn_actor(type_id, color)
+        #     if sumo_actor_id != INVALID_ACTOR_ID:
+        #         self.synchronization.carla2sumo_ids[carla_id] = sumo_actor_id
+        #         self.synchronization.sumo.subscribe(sumo_actor_id)
         
-        self._player_sumo_id = sumo_actor_id
-        self.synchronization.ego_sumo_id = sumo_actor_id 
-        self.synchronization.sumo.player_id = sumo_actor_id
+        # self._player_sumo_id = sumo_actor_id
+        # self.synchronization.ego_sumo_id = sumo_actor_id 
+        # self.synchronization.sumo.player_id = sumo_actor_id
+        # print("Sync dict: ", self.synchronization.carla2sumo_ids)
 
     def _add_vehiclepool_vehs_to_synch(self):
 
@@ -503,9 +542,8 @@ class TrafficCarlaEnv(object):
                     self.synchronization.sumo.subscribe(sumo_actor_id)
 
     def ready(self, ticks=10):
-        for _ in range(ticks):
-            self.step(warmup=True)
-
+        # for _ in range(ticks):
+        #     self.step(warmup=True)
         for x in self._actor_dict['camera']:
             x.get()
 
@@ -541,24 +579,25 @@ class TrafficCarlaEnv(object):
 
         self._tick += 1
 
-        transform = self._player.get_transform()
-        velocity = self._player.get_velocity()
+        result = None 
+
+        if not warmup:
+            transform = self._player.get_transform()
+            velocity = self._player.get_velocity()
 
         # Put here for speed (get() busy polls queue).
 
-        if not warmup and self.synchronization.sumo.has_result():
-            result = {key: val.get() for key, val in self._cameras.items()}
-            result.update({
-                'wall': time.time() - self._time_start,
-                'tick': self._tick,
-                'x': transform.location.x,
-                'y': transform.location.y,
-                'theta': transform.rotation.yaw,
-                'speed': np.linalg.norm([velocity.x, velocity.y, velocity.z]),
-                'ego_lane_state': self.get_state() if self._player_sumo_id else None 
-                })
-        else: 
-            result = None 
+            if self.synchronization.sumo.has_result():
+                result = {key: val.get() for key, val in self._cameras.items()}
+                result.update({
+                    'wall': time.time() - self._time_start,
+                    'tick': self._tick,
+                    'x': transform.location.x,
+                    'y': transform.location.y,
+                    'theta': transform.rotation.yaw,
+                    'speed': np.linalg.norm([velocity.x, velocity.y, velocity.z]),
+                    'ego_lane_state': self.get_state() if self._player_sumo_id else None 
+                    })
 
         return result
 
