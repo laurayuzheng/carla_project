@@ -49,7 +49,7 @@ def collect_episode(env, save_dir):
     for step in tqdm.tqdm(range(EPISODE_LENGTH * FRAME_SKIP)):
         observations = env.step()
 
-        if step % FRAME_SKIP != 0:
+        if step % FRAME_SKIP != 0 or not observations:
             continue
 
         index = step // FRAME_SKIP

@@ -434,22 +434,16 @@ class TrafficCarlaEnv(object):
     def step(self, control=None, warmup=False):
         if control is not None:
             self._player.apply_control(control)
-
-        # self._world.tick()
+            
         self.synchronization.tick() 
-        # self._player_sumo_id = self.synchronization.ego_sumo_id
         self._tick += 1
-        # self._pedestrian_pool.tick()
 
         transform = self._player.get_transform()
         velocity = self._player.get_velocity()
 
-        # self.synchronization.sumo.update_lane_states()
-        # print(f"Player id: {self._player_sumo_id}")
-
         # Put here for speed (get() busy polls queue).
 
-        if not warmup:
+        if not warmup and self.synchronization.sumo.has_result():
             result = {key: val.get() for key, val in self._cameras.items()}
             result.update({
                 'wall': time.time() - self._time_start,
