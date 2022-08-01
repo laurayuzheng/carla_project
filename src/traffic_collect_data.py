@@ -36,7 +36,7 @@ def collect_episode(env, save_dir):
     (save_dir / 'rgb_right').mkdir()
     (save_dir / 'map').mkdir()
 
-    env._client.start_recorder(str(save_dir / 'recording.log'))
+    # env._client.start_recorder(str(save_dir / 'recording.log'))
 
     spectator = env._world.get_spectator()
     spectator.set_transform(
@@ -72,7 +72,7 @@ def collect_episode(env, save_dir):
 
     pd.DataFrame(measurements).to_csv(save_dir / 'measurements.csv', index=False)
 
-    env._client.stop_recorder()
+    # env._client.stop_recorder()
 
 
 def main():
@@ -128,7 +128,7 @@ def main():
     argparser.add_argument('--safe',
                            action='store_true',
                            help='avoid spawning vehicles prone to accidents')
-    
+
     argparser.add_argument('--debug', action='store_true', help='enable debug messages')
     args = argparser.parse_args()
 
@@ -152,7 +152,7 @@ def main():
                         seed=np.random.randint(0, 256))
                 env._player.set_autopilot(True)
 
-                collect_episode(env, SAVE_PATH / ('%03d' % len(list(SAVE_PATH.glob('*')))))
+                collect_episode(env, SAVE_PATH / ('%03d_Town0%s' % (len(list(SAVE_PATH.glob('*'))), i)))
 
 
 if __name__ == '__main__':
