@@ -133,7 +133,7 @@ def main():
 
     np.random.seed(1337)
 
-    for i in range(1, 8):
+    for i in [1,4,5]:
         with TrafficCarlaEnv(args, town='Town0%s' % i) as env:
             for episode in range(EPISODES):
                 env.reset(

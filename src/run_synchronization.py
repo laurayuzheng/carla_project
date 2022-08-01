@@ -83,6 +83,7 @@ class SimulationSynchronization(object):
         # Mapped actor ids.
         self.sumo2carla_ids = {}  # Contains only actors controlled by sumo.
         self.carla2sumo_ids = {}  # Contains only actors controlled by carla.
+        self.ego_sumo_id = None # We need sumo id of ego vehicle to get state
 
         BridgeHelper.blueprint_library = self.carla.world.get_blueprint_library()
         BridgeHelper.offset = self.sumo.get_net_offset()
@@ -159,6 +160,9 @@ class SimulationSynchronization(object):
         carla_spawned_actors = self.carla.spawned_actors - set(self.sumo2carla_ids.values())
         for carla_actor_id in carla_spawned_actors:
             carla_actor = self.carla.get_actor(carla_actor_id)
+            # blueprint_name = carla_actor.type_id 
+            # blueprint = self.carla.world.get_blueprint_library().filter(blueprint_name)[0]
+            # role = blueprint.get_attribute('role_name')
 
             type_id = BridgeHelper.get_sumo_vtype(carla_actor)
             color = carla_actor.attributes.get('color', None) if self.sync_vehicle_color else None
@@ -167,6 +171,9 @@ class SimulationSynchronization(object):
                 if sumo_actor_id != INVALID_ACTOR_ID:
                     self.carla2sumo_ids[carla_actor_id] = sumo_actor_id
                     self.sumo.subscribe(sumo_actor_id)
+                
+                # if not self.ego_sumo_id and role == 'hero':
+                #     self.ego_sumo_id = sumo_actor_id
 
         # Destroying required carla actors in sumo.
         for carla_actor_id in self.carla.destroyed_actors:
@@ -224,6 +231,23 @@ class SimulationSynchronization(object):
         # Closing sumo and carla client.
         self.carla.close()
         self.sumo.close()
+
+    def reset(self):
+        """ 
+            Reset function (without closing connections)
+        """
+        for carla_actor_id in self.sumo2carla_ids.values():
+            self.carla.destroy_actor(carla_actor_id)
+
+        for sumo_actor_id in self.carla2sumo_ids.values():
+            self.sumo.destroy_actor(sumo_actor_id)
+
+        self.sumo2carla_ids = {} 
+        self.carla2sumo_ids = {}
+
+        self.ego_sumo_id = None 
+        
+
 
 
 def synchronization_loop(args):
