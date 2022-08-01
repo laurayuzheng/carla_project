@@ -5,6 +5,15 @@ import time
 
 import numpy as np
 import carla
+import tempfile
+import lxml.etree as ET  # pylint: disable=wrong-import-position
+from sumo_integration.util.netconvert_carla import netconvert_carla
+import re
+import json 
+import sumolib
+import logging 
+import traci 
+import random 
 
 from PIL import Image, ImageDraw
 
@@ -36,6 +45,24 @@ PRESET_WEATHERS = {
 WEATHERS = list(PRESET_WEATHERS.values())
 VEHICLE_NAME = 'vehicle.lincoln.mkz2017'
 COLLISION_THRESHOLD = 20000
+
+def write_sumocfg_xml(cfg_file, net_file, vtypes_file, viewsettings_file, additional_traci_clients=0):
+    """
+    Writes sumo configuration xml file.
+    """
+    root = ET.Element('configuration')
+
+    input_tag = ET.SubElement(root, 'input')
+    ET.SubElement(input_tag, 'net-file', {'value': net_file})
+    ET.SubElement(input_tag, 'route-files', {'value': vtypes_file})
+
+    gui_tag = ET.SubElement(root, 'gui_only')
+    ET.SubElement(gui_tag, 'gui-settings-file', {'value': viewsettings_file})
+
+    ET.SubElement(root, 'num-clients', {'value': str(additional_traci_clients+1)})
+
+    tree = ET.ElementTree(root)
+    tree.write(cfg_file, pretty_print=True, encoding='UTF-8', xml_declaration=True)
 
 
 def set_sync_mode(client, sync):
@@ -218,39 +245,39 @@ class MapCamera(Camera):
         return np.array(image)
 
 
-# class VehiclePool(object):
-#     def __init__(self, client, n_vehicles):
-#         self.client = client
-#         self.world = client.get_world()
+class VehiclePool(object):
+    def __init__(self, client, n_vehicles):
+        self.client = client
+        self.world = client.get_world()
 
-#         veh_bp = self.world.get_blueprint_library().filter('vehicle.*')
-#         spawn_points = np.random.choice(self.world.get_map().get_spawn_points(), n_vehicles)
-#         batch = list()
+        veh_bp = self.world.get_blueprint_library().filter('vehicle.*')
+        spawn_points = np.random.choice(self.world.get_map().get_spawn_points(), n_vehicles)
+        batch = list()
 
-#         for i, transform in enumerate(spawn_points):
-#             bp = np.random.choice(veh_bp)
-#             bp.set_attribute('role_name', 'autopilot')
+        for i, transform in enumerate(spawn_points):
+            bp = np.random.choice(veh_bp)
+            bp.set_attribute('role_name', 'autopilot')
 
-#             batch.append(
-#                     carla.command.SpawnActor(bp, transform).then(
-#                         carla.command.SetAutopilot(carla.command.FutureActor, True)))
+            batch.append(
+                    carla.command.SpawnActor(bp, transform).then(
+                        carla.command.SetAutopilot(carla.command.FutureActor, True)))
 
-#         self.vehicles = list()
-#         errors = set()
+        self.vehicles = list()
+        errors = set()
 
-#         for msg in self.client.apply_batch_sync(batch):
-#             if msg.error:
-#                 errors.add(msg.error)
-#             else:
-#                 self.vehicles.append(msg.actor_id)
+        for msg in self.client.apply_batch_sync(batch):
+            if msg.error:
+                errors.add(msg.error)
+            else:
+                self.vehicles.append(msg.actor_id)
 
-#         if errors:
-#             print('\n'.join(errors))
+        if errors:
+            print('\n'.join(errors))
 
-#         print('%d / %d vehicles spawned.' % (len(self.vehicles), n_vehicles))
+        print('%d / %d vehicles spawned.' % (len(self.vehicles), n_vehicles))
 
-#     def __del__(self):
-#         self.client.apply_batch([carla.command.DestroyActor(x) for x in self.vehicles])
+    def __del__(self):
+        self.client.apply_batch([carla.command.DestroyActor(x) for x in self.vehicles])
 
 
 # class PedestrianPool(object):
@@ -332,15 +359,10 @@ class TrafficCarlaEnv(object):
                 port=2000, 
                 **kwargs):
 
-
+        tmpdir = tempfile.mkdtemp()
         sumo_cfg_file = os.path.join("sumo_integration", "examples", town+".sumocfg")
-        sumo_simulation = SumoSimulation(sumo_cfg_file, args.step_length, args.sumo_host,
-                                     args.sumo_port, args.sumo_gui, args.client_order)
         
         carla_simulation = CarlaSimulation(args.carla_host, args.carla_port, args.step_length)
-        self.synchronization = SimulationSynchronization(sumo_simulation, carla_simulation, args.tls_manager,
-                                                args.sync_vehicle_color, args.sync_vehicle_lights)
-
         self._client = carla_simulation.client
         self._client.set_timeout(30.0)
 
@@ -359,6 +381,65 @@ class TrafficCarlaEnv(object):
         # vehicle, sensor
         self._actor_dict = collections.defaultdict(list)
         self._cameras = dict()
+
+        # For spawning npcs (from spawn_npc_sumo.py)
+        current_map = self._map
+        xodr_file = os.path.join(tmpdir, current_map.name + '.xodr')
+        current_map.save_to_disk(xodr_file)
+        net_file = os.path.join(tmpdir, current_map.name + '.net.xml')
+        netconvert_carla(xodr_file, net_file, guess_tls=True)
+        basedir = os.path.dirname(os.path.realpath(__file__))
+        cfg_file = os.path.join(tmpdir, current_map.name + '.sumocfg')
+        vtypes_file = os.path.join(basedir, 'examples', 'carlavtypes.rou.xml')
+        viewsettings_file = os.path.join(basedir, 'examples', 'viewsettings.xml')
+        write_sumocfg_xml(cfg_file, net_file, vtypes_file, viewsettings_file, 0)
+
+        self.sumo_net = sumolib.net.readNet(net_file)
+        sumo_simulation = SumoSimulation(sumo_cfg_file, args.step_length, args.sumo_host,
+                                     args.sumo_port, args.sumo_gui, 1)
+        
+        
+        self.synchronization = SimulationSynchronization(sumo_simulation, carla_simulation, args.tls_manager,
+                                                args.sync_vehicle_color, args.sync_vehicle_lights)
+
+        # ----------
+        # Blueprints
+        # ----------
+        with open('sumo_integration/vtypes.json') as f:
+            vtypes = json.load(f)['carla_blueprints']
+        blueprints = vtypes.keys()
+
+        filterv = re.compile('vehicle.*')
+        blueprints = list(filter(filterv.search, blueprints))
+
+        if args.safe:
+            blueprints = [
+                x for x in blueprints if vtypes[x]['vClass'] not in ('motorcycle', 'bicycle')
+            ]
+            blueprints = [x for x in blueprints if not x.endswith('isetta')]
+            blueprints = [x for x in blueprints if not x.endswith('carlacola')]
+            blueprints = [x for x in blueprints if not x.endswith('cybertruck')]
+            blueprints = [x for x in blueprints if not x.endswith('t2')]
+
+        if not blueprints:
+            raise RuntimeError('No blueprints available due to user restrictions.')
+
+        # --------------
+        # Spawn vehicles
+        # --------------
+        # Spawns sumo NPC vehicles.
+        sumo_edges = self.sumo_net.getEdges()
+
+        for i in range(args.number_of_vehicles):
+            type_id = random.choice(blueprints)
+            vclass = vtypes[type_id]['vClass']
+
+            allowed_edges = [e for e in sumo_edges if e.allows(vclass)]
+            edge = random.choice(allowed_edges)
+
+            traci.route.add('route_{}'.format(i), [edge.getID()])
+            traci.vehicle.add('sumo_{}'.format(i), 'route_{}'.format(i), typeID=type_id)
+
 
     def _set_weather(self, weather_string):
         if weather_string == 'random':
@@ -381,6 +462,8 @@ class TrafficCarlaEnv(object):
             self._setup_sensors()
 
             self._set_weather(weather)
+            # self._vehicle_pool = VehiclePool(self._client, n_pedestrians)
+            # self._add_vehiclepool_vehs_to_synch()
 
             is_ready = self.ready()
 
@@ -388,16 +471,9 @@ class TrafficCarlaEnv(object):
         vehicle_bp = np.random.choice(self._blueprints.filter(VEHICLE_NAME))
         vehicle_bp.set_attribute('role_name', 'hero')
 
-        spawned = False
-
-        # while not spawned:
-        #     try:
         spawn_point = np.random.choice(self._map.get_spawn_points())
         self._player = self._world.spawn_actor(vehicle_bp, spawn_point)
-            #     spawned = True
-            # except RuntimeError:
-            #     pass
-        
+
         self._actor_dict['player'].append(self._player)
         
         # Manually add the player to SUMO simulation so we can save the id
@@ -414,6 +490,17 @@ class TrafficCarlaEnv(object):
         self.synchronization.ego_sumo_id = sumo_actor_id 
         self.synchronization.sumo.player_id = sumo_actor_id
 
+    def _add_vehiclepool_vehs_to_synch(self):
+
+        for id in self._vehicle_pool.vehicles:
+            carla_id = id
+            type_id = BridgeHelper.get_sumo_vtype(self._player)
+            color = self._player.attributes.get('color', None) 
+            if type_id is not None:
+                sumo_actor_id = self.synchronization.sumo.spawn_actor(type_id, color)
+                if sumo_actor_id != INVALID_ACTOR_ID:
+                    self.synchronization.carla2sumo_ids[carla_id] = sumo_actor_id
+                    self.synchronization.sumo.subscribe(sumo_actor_id)
 
     def ready(self, ticks=10):
         for _ in range(ticks):
@@ -436,6 +523,22 @@ class TrafficCarlaEnv(object):
             self._player.apply_control(control)
             
         self.synchronization.tick() 
+
+        # Updates vehicle routes
+        for vehicle_id in traci.vehicle.getIDList():
+            route = traci.vehicle.getRoute(vehicle_id)
+            index = traci.vehicle.getRouteIndex(vehicle_id)
+            vclass = traci.vehicle.getVehicleClass(vehicle_id)
+
+            if index == (len(route) - 1):
+                current_edge = self.sumo_net.getEdge(route[index])
+                available_edges = list(current_edge.getAllowedOutgoing(vclass).keys())
+                if available_edges:
+                    next_edge = random.choice(available_edges)
+
+                    new_route = [current_edge.getID(), next_edge.getID()]
+                    traci.vehicle.setRoute(vehicle_id, new_route)
+
         self._tick += 1
 
         transform = self._player.get_transform()

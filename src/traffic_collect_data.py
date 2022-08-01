@@ -119,6 +119,16 @@ def main():
                            choices=['none', 'sumo', 'carla'],
                            help="select traffic light manager (default: none)",
                            default='none')
+    argparser.add_argument('-n',
+                           '--number-of-vehicles',
+                           metavar='N',
+                           default=50,
+                           type=int,
+                           help='number of vehicles (default: 50)')
+    argparser.add_argument('--safe',
+                           action='store_true',
+                           help='avoid spawning vehicles prone to accidents')
+    
     argparser.add_argument('--debug', action='store_true', help='enable debug messages')
     args = argparser.parse_args()
 
