@@ -422,9 +422,9 @@ class TrafficCarlaEnv(object):
 
         self.safe = args.safe 
         self.number_of_vehicles = args.number_of_vehicles
-        self.npcs_initialized = False
 
-        self._initialize_npcs()
+        # self._initialize_npcs(n_vehicles=args.number_of_vehicles)
+        
 
     def _set_weather(self, weather_string):
         if weather_string == 'random':
@@ -435,8 +435,8 @@ class TrafficCarlaEnv(object):
         self.weather = weather
         self._world.set_weather(weather)
 
-    def _initialize_npcs(self):
-
+    def _initialize_npcs(self, n_vehicles=10):
+        self.number_of_vehicles = n_vehicles
         # ----------
         # Blueprints
         # ----------
@@ -465,7 +465,7 @@ class TrafficCarlaEnv(object):
         # Spawns sumo NPC vehicles.
         sumo_edges = self.sumo_net.getEdges()
 
-        for i in range(self.number_of_vehicles):
+        for i in range(n_vehicles):
             type_id = random.choice(blueprints)
             vclass = vtypes[type_id]['vClass']
 
@@ -475,7 +475,6 @@ class TrafficCarlaEnv(object):
             traci.route.add('route_{}'.format(i), [edge.getID()])
             traci.vehicle.add('sumo_{}'.format(i), 'route_{}'.format(i), typeID=type_id)
 
-        self.npcs_initialized = True 
 
     def reset(self, weather='random', n_vehicles=10, n_pedestrians=10, seed=0, ticks=10):
         is_ready = False
@@ -486,8 +485,8 @@ class TrafficCarlaEnv(object):
             self.synchronization.reset()
             self._clean_up()
 
-            if self.npcs_initialized == False:
-                self._initialize_npcs()
+            # if init == False:
+            self._initialize_npcs(n_vehicles=n_vehicles)
             
             for _ in range(ticks):
                 self.step(warmup=True)
@@ -571,9 +570,8 @@ class TrafficCarlaEnv(object):
             if index == (len(route) - 1):
                 current_edge = self.sumo_net.getEdge(route[index])
                 available_edges = list(current_edge.getAllowedOutgoing(vclass).keys())
-                if available_edges:
+                if available_edges: 
                     next_edge = random.choice(available_edges)
-
                     new_route = [current_edge.getID(), next_edge.getID()]
                     traci.vehicle.setRoute(vehicle_id, new_route)
 
@@ -639,11 +637,14 @@ class TrafficCarlaEnv(object):
 
         # The only actor in _actor_dict should be ego vehicle, 
         # Because synchronization is providing npc vehicles
-        # for actor_type in list(self._actor_dict.keys()):
-        #     self._actor_dict[actor_type].clear()
+        for actor_type in list(self._actor_dict.keys()):
+            self._actor_dict[actor_type].clear()
 
-        # for carla_actor_id in self.synchronization.sumo2carla_ids.values():
-        #     self.synchronization.carla.destroy_actor(carla_actor_id)
+        for carla_actor_id in self.synchronization.sumo2carla_ids.values():
+            self.synchronization.carla.destroy_actor(carla_actor_id)
+        
+        for sumo_actor_id in self.synchronization.carla2sumo_ids.values():
+            self.synchronization.sumo.destroy_actor(sumo_actor_id)
 
         self._actor_dict.clear()
 

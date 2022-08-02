@@ -26,6 +26,7 @@ EPISODES = 10
 FRAME_SKIP = 5
 SAVE_PATH = Path('/scratch/2020_CARLA_challenge/data/traffic_data')
 DEBUG = False
+WARMUP_STEPS=50
 
 
 def collect_episode(env, save_dir):
@@ -46,13 +47,14 @@ def collect_episode(env, save_dir):
 
     measurements = list()
 
-    for step in tqdm.tqdm(range(EPISODE_LENGTH * FRAME_SKIP)):
+    for step in tqdm.tqdm(range(EPISODE_LENGTH * FRAME_SKIP + WARMUP_STEPS)):
+        
         observations = env.step()
 
-        if step % FRAME_SKIP != 0 or not observations:
+        if step < WARMUP_STEPS or step % FRAME_SKIP != 0 or not observations:
             continue
 
-        index = step // FRAME_SKIP
+        index = step // FRAME_SKIP - WARMUP_STEPS
         rgb = observations.pop('rgb')
         rgb_left = observations.pop('rgb_left')
         rgb_right = observations.pop('rgb_right')
@@ -145,16 +147,19 @@ def main():
     
     for wi in [1, 3, 8, 10]:
         for i in [1,4,5]:
-            with TrafficCarlaEnv(args, town='Town0%s' % i) as env:
-                for episode in range(EPISODES):
+            for episode in range(EPISODES):
+                with TrafficCarlaEnv(args, town='Town0%s' % i) as env:
                     weather_setting = PRESET_WEATHERS[wi]
                     env.reset(
                             weather=weather_setting,
-                            n_vehicles=np.random.choice([50, 100, 200]),
+                            ticks=100, 
+                            # n_vehicles=np.random.choice([50, 100, 200]),
+                            n_vehicles=args.number_of_vehicles,
                             n_pedestrians=np.random.choice([50, 100, 200]),
                             seed=np.random.randint(0, 256))
-                    env._player.set_autopilot(True)
+                    # env._player.set_autopilot(True)
                     collect_episode(env, SAVE_PATH / ('%03d_Town0%s_%s' % (len(list(SAVE_PATH.glob('*'))), i, PRESET_WEATHERS_STRING[wi])))
+                    env._clean_up()
 
 
 if __name__ == '__main__':
