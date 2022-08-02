@@ -1,4 +1,5 @@
 import collections
+from multiprocessing import synchronize
 import os 
 import queue
 import time
@@ -512,6 +513,7 @@ class TrafficCarlaEnv(object):
 
         self._actor_dict['player'].append(self._player)
         self._player_sumo_id = sumo_id
+        self.synchronization.sumo.player_id = sumo_id
         
         # Manually add the player to SUMO simulation so we can save the id
         # carla_id = self._player.id 
@@ -549,11 +551,11 @@ class TrafficCarlaEnv(object):
         self._time_start = time.time()
         self._tick = 0
 
-        return True if self._player_sumo_id else False 
+        return True if self._player_sumo_id and self.synchronization.sumo.player_id else False 
 
     def get_state(self):
         '''Get the state of the driver's lane'''
-        return self.synchronization.sumo.get_state(self._player_sumo_id)
+        return self.synchronization.sumo.get_state()
 
     def step(self, control=None, warmup=False):
         if control is not None:
@@ -586,6 +588,8 @@ class TrafficCarlaEnv(object):
         # Put here for speed (get() busy polls queue).
 
             if self.synchronization.sumo.has_result():
+                state, player_ind = self.get_state() 
+
                 result = {key: val.get() for key, val in self._cameras.items()}
                 result.update({
                     'wall': time.time() - self._time_start,
@@ -594,8 +598,9 @@ class TrafficCarlaEnv(object):
                     'y': transform.location.y,
                     'theta': transform.rotation.yaw,
                     'speed': np.linalg.norm([velocity.x, velocity.y, velocity.z]),
-                    'ego_lane_state': self.get_state() if self._player_sumo_id else None 
-                    })
+                    'player_lane_state': state, 
+                    'player_ind_in_lane': player_ind
+                })
 
         return result
 
