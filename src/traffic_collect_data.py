@@ -54,7 +54,7 @@ def collect_episode(env, save_dir):
         if step < WARMUP_STEPS or step % FRAME_SKIP != 0 or not observations:
             continue
 
-        index = step // FRAME_SKIP - WARMUP_STEPS
+        index = (step - WARMUP_STEPS) // FRAME_SKIP 
         rgb = observations.pop('rgb')
         rgb_left = observations.pop('rgb_left')
         rgb_right = observations.pop('rgb_right')
