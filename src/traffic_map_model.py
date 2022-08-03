@@ -17,6 +17,17 @@ from .utils.heatmap import ToHeatmap
 from .dataset import get_dataset
 from . import common
 
+import gym
+
+from flow.core.util import ensure_dir
+from flow.utils.registry import env_constructor
+from flow.utils.rllib import FlowParamsEncoder, get_flow_params
+from flow.utils.registry import make_create_env
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
+import torch
+from torch import det
+import numpy as np
+from FLOW_CONFIG import *
 
 @torch.no_grad()
 def visualize(batch, out, between, out_cmd, loss_point, loss_cmd, target_heatmap):
@@ -85,6 +96,11 @@ class MapModel(pl.LightningModule):
         self.to_heatmap = ToHeatmap(hparams.heatmap_radius)
         self.net = SegmentationModel(10, 4, hack=hparams.hack, temperature=hparams.temperature)
         self.controller = RawController(4)
+        constructor, env_name = env_constructor(params=flow_params, version=0)
+        eval_flow_params = flow_params.copy()
+        constructor2, env_name2 = env_constructor(params=eval_flow_params, version=0)
+        self.flow_train_env = constructor() 
+        self.flow_eval_env = constructor2()
 
     def forward(self, topdown, target, debug=False):
         target_heatmap = self.to_heatmap(target, topdown)[:, None]
@@ -101,7 +117,7 @@ class MapModel(pl.LightningModule):
 
         alpha = torch.rand(out.shape).type_as(out)
         between = alpha * out + (1-alpha) * points # Interpolate between predicted waypoints and ground truth waypoints
-        out_cmd = self.controller(between)
+        out_cmd = self.controller(between) # Outputs 2 things
 
         loss_point = torch.nn.functional.l1_loss(out, points, reduction='none').mean((1, 2))
         loss_cmd_raw = torch.nn.functional.l1_loss(out_cmd, actions, reduction='none')

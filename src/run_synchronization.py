@@ -90,7 +90,7 @@ class SimulationSynchronization(object):
 
         # Configuring carla simulation in sync mode.
         settings = self.carla.world.get_settings()
-        settings.synchronous_mode = True
+        settings.synchronous_mode = False 
         settings.fixed_delta_seconds = self.carla.step_length
         self.carla.world.apply_settings(settings)
 

@@ -21,7 +21,7 @@ else:
     sys.exit("please declare environment variable 'SUMO_HOME'")
 
 
-EPISODE_LENGTH = 1000
+EPISODE_LENGTH = 500
 EPISODES = 10
 FRAME_SKIP = 5
 SAVE_PATH = Path('/scratch/2020_CARLA_challenge/data/traffic_data')
@@ -99,7 +99,7 @@ def main():
                            help='TCP port to listen to (default: 8813)')
     argparser.add_argument('--sumo-gui', action='store_true', help='run the gui version of sumo')
     argparser.add_argument('--step-length',
-                           default=0.05,
+                           default=1/10,
                            type=float,
                            help='set fixed delta seconds (default: 0.05s)')
     argparser.add_argument('--client-order',
@@ -117,19 +117,19 @@ def main():
                            action='store_true',
                            help='synchronize all vehicle properties (default: False)')
     argparser.add_argument('--tls-manager',
-                           type=str,
-                           choices=['none', 'sumo', 'carla'],
-                           help="select traffic light manager (default: none)",
-                           default='none')
-    argparser.add_argument('-n',
-                           '--number-of-vehicles',
-                           metavar='N',
+                           type=str, 
+                           choices=['none', 'sumo', 'carla'], 
+                           help="select traffic light manager (default: none)", 
+                           default='sumo') 
+    argparser.add_argument('-n', 
+                           '--number-of-vehicles', 
+                           metavar='N', 
                            default=50,
                            type=int,
                            help='number of vehicles (default: 50)')
-    argparser.add_argument('--safe',
-                           action='store_true',
-                           help='avoid spawning vehicles prone to accidents')
+    argparser.add_argument('--safe', 
+                           action='store_true', 
+                           help='avoid spawning vehicles prone to accidents') 
 
     argparser.add_argument('--debug', action='store_true', help='enable debug messages')
     args = argparser.parse_args()
@@ -145,19 +145,19 @@ def main():
 
     np.random.seed(1337)
     
-    for wi in [1, 3, 8, 10]:
-        for i in [1,4,5]:
+    for wi in [1, 8, 12]:
+        for i in [1,4,5, 7, 10]:
             for episode in range(EPISODES):
                 with TrafficCarlaEnv(args, town='Town0%s' % i) as env:
                     weather_setting = PRESET_WEATHERS[wi]
                     env.reset(
                             weather=weather_setting,
-                            ticks=100, 
-                            # n_vehicles=np.random.choice([50, 100, 200]),
+                            ticks=20, 
+                            # n_vehicles=np.random.choice([100, 130, 200]),
                             n_vehicles=args.number_of_vehicles,
                             n_pedestrians=np.random.choice([50, 100, 200]),
                             seed=np.random.randint(0, 256))
-                    # env._player.set_autopilot(True)
+                    env._player.set_autopilot(True)
                     collect_episode(env, SAVE_PATH / ('%03d_Town0%s_%s' % (len(list(SAVE_PATH.glob('*'))), i, PRESET_WEATHERS_STRING[wi])))
                     env._clean_up()
 

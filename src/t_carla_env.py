@@ -385,7 +385,7 @@ class TrafficCarlaEnv(object):
         self._client = carla_simulation.client
         self._client.set_timeout(30.0)
 
-        set_sync_mode(self._client, False)
+        # set_sync_mode(self._client, False)
 
         self._town_name = town
         self._world = self._client.load_world(town)
@@ -426,7 +426,6 @@ class TrafficCarlaEnv(object):
 
         # self._initialize_npcs(n_vehicles=args.number_of_vehicles)
         
-
     def _set_weather(self, weather_string):
         if weather_string == 'random':
             weather = np.random.choice(WEATHERS)
@@ -487,12 +486,19 @@ class TrafficCarlaEnv(object):
             self._clean_up()
 
             # if init == False:
-            self._initialize_npcs(n_vehicles=n_vehicles)
+            self._spawn_player()
             
             for _ in range(ticks):
                 self.step(warmup=True)
 
-            self._spawn_player()
+            self._initialize_npcs(n_vehicles=n_vehicles)
+
+            for _ in range(ticks):
+                self.step(warmup=True)
+
+            self._player_sumo_id = self.synchronization.carla2sumo_ids[self._player.id]
+            self.synchronization.sumo.player_id = self._player_sumo_id
+
             self._setup_sensors()
 
             self._set_weather(weather)
@@ -502,18 +508,29 @@ class TrafficCarlaEnv(object):
             is_ready = self.ready()
 
     def _spawn_player(self):
-        # vehicle_bp = np.random.choice(self._blueprints.filter(VEHICLE_NAME))
-        # vehicle_bp.set_attribute('role_name', 'hero')
+        vehicle_bp = np.random.choice(self._blueprints.filter(VEHICLE_NAME))
+        vehicle_bp.set_attribute('role_name', 'hero')
 
-        # spawn_point = np.random.choice(self._map.get_spawn_points())
-        # self._player = self._world.spawn_actor(vehicle_bp, spawn_point)
+        acceptable_spawn = False 
 
-        sumo_id, carla_id = random.choice(list(self.synchronization.sumo2carla_ids.items()))
-        self._player = self._world.get_actor(carla_id) 
+        while not acceptable_spawn:
+            spawn_point = np.random.choice(self._map.get_spawn_points())
+            candidate = self._world.spawn_actor(vehicle_bp, spawn_point)
+            transform = candidate.get_transform() 
+            # print(transform.location)
+            # print(transform.rotation)
+            if transform.location.z > 0.5 or transform.rotation.roll > 0.:
+                candidate.destroy() 
+            else: 
+                acceptable_spawn = True 
+                self._player = candidate 
+
+            # self._player = self._world.spawn_actor(vehicle_bp, spawn_point)
+
+        # sumo_id, carla_id = random.choice(list(self.synchronization.sumo2carla_ids.items()))
+        # self._player = self._world.get_actor(carla_id) 
 
         self._actor_dict['player'].append(self._player)
-        self._player_sumo_id = sumo_id
-        self.synchronization.sumo.player_id = sumo_id
         
         # Manually add the player to SUMO simulation so we can save the id
         # carla_id = self._player.id 
@@ -584,12 +601,16 @@ class TrafficCarlaEnv(object):
         if not warmup:
             transform = self._player.get_transform()
             velocity = self._player.get_velocity()
+            acceleration = self._player.get_acceleration()
+            control = self._player.get_control()
+            # velocity = self.synchronization.sumo.get_speed(self._player_sumo_id)
+            # acceleration = self.synchronization.sumo.get_accel(self._player_sumo_id)
 
         # Put here for speed (get() busy polls queue).
 
             if self.synchronization.sumo.has_result():
                 state, player_ind = self.get_state() 
-
+                
                 result = {key: val.get() for key, val in self._cameras.items()}
                 result.update({
                     'wall': time.time() - self._time_start,
@@ -597,7 +618,11 @@ class TrafficCarlaEnv(object):
                     'x': transform.location.x,
                     'y': transform.location.y,
                     'theta': transform.rotation.yaw,
+                    'steer': control.steer,
+                    'throttle': control.throttle,
+                    'brake': control.brake,
                     'speed': np.linalg.norm([velocity.x, velocity.y, velocity.z]),
+                    'accel': np.linalg.norm([acceleration.x, acceleration.y, acceleration.z]),
                     'player_lane_state': state, 
                     'player_ind_in_lane': player_ind
                 })
