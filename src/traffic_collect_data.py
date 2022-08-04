@@ -21,7 +21,7 @@ else:
     sys.exit("please declare environment variable 'SUMO_HOME'")
 
 
-EPISODE_LENGTH = 500
+EPISODE_LENGTH = 1000
 EPISODES = 10
 FRAME_SKIP = 5
 SAVE_PATH = Path('/scratch/2020_CARLA_challenge/data/traffic_data')
@@ -99,7 +99,7 @@ def main():
                            help='TCP port to listen to (default: 8813)')
     argparser.add_argument('--sumo-gui', action='store_true', help='run the gui version of sumo')
     argparser.add_argument('--step-length',
-                           default=1/10,
+                           default=1/30,
                            type=float,
                            help='set fixed delta seconds (default: 0.05s)')
     argparser.add_argument('--client-order',
@@ -143,10 +143,10 @@ def main():
     else:
         logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
 
-    np.random.seed(1337)
+    np.random.seed(0)
     
     for wi in [1, 8, 12]:
-        for i in [1,4,5, 7, 10]:
+        for i in [1, 4, 5, 7, 10]:
             for episode in range(EPISODES):
                 with TrafficCarlaEnv(args, town='Town0%s' % i) as env:
                     weather_setting = PRESET_WEATHERS[wi]

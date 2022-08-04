@@ -486,18 +486,17 @@ class TrafficCarlaEnv(object):
             self._clean_up()
 
             # if init == False:
+            self._initialize_npcs(n_vehicles=n_vehicles)
             self._spawn_player()
             
-            for _ in range(ticks):
-                self.step(warmup=True)
-
-            self._initialize_npcs(n_vehicles=n_vehicles)
+            # for _ in range(ticks):
+            #     self.step(warmup=True)
 
             for _ in range(ticks):
                 self.step(warmup=True)
 
-            self._player_sumo_id = self.synchronization.carla2sumo_ids[self._player.id]
-            self.synchronization.sumo.player_id = self._player_sumo_id
+            # self._player_sumo_id = self.synchronization.carla2sumo_ids[self._player.id]
+            # self.synchronization.sumo.player_id = self._player_sumo_id
 
             self._setup_sensors()
 
@@ -515,10 +514,13 @@ class TrafficCarlaEnv(object):
 
         while not acceptable_spawn:
             spawn_point = np.random.choice(self._map.get_spawn_points())
+            print(spawn_point)
             candidate = self._world.spawn_actor(vehicle_bp, spawn_point)
+            
+            for i in range(5):
+                self.step(warmup=True)
+                
             transform = candidate.get_transform() 
-            # print(transform.location)
-            # print(transform.rotation)
             if transform.location.z > 0.5 or transform.rotation.roll > 0.:
                 candidate.destroy() 
             else: 
@@ -533,19 +535,18 @@ class TrafficCarlaEnv(object):
         self._actor_dict['player'].append(self._player)
         
         # Manually add the player to SUMO simulation so we can save the id
-        # carla_id = self._player.id 
-        # type_id = BridgeHelper.get_sumo_vtype(self._player)
-        # color = self._player.attributes.get('color', None) 
-        # if type_id is not None:
-        #     sumo_actor_id = self.synchronization.sumo.spawn_actor(type_id, color)
-        #     if sumo_actor_id != INVALID_ACTOR_ID:
-        #         self.synchronization.carla2sumo_ids[carla_id] = sumo_actor_id
-        #         self.synchronization.sumo.subscribe(sumo_actor_id)
+        carla_id = self._player.id 
+        type_id = BridgeHelper.get_sumo_vtype(self._player)
+        color = self._player.attributes.get('color', None) 
+        if type_id is not None:
+            sumo_actor_id = self.synchronization.sumo.spawn_actor(type_id, color)
+            if sumo_actor_id != INVALID_ACTOR_ID:
+                self.synchronization.carla2sumo_ids[carla_id] = sumo_actor_id
+                self.synchronization.sumo.subscribe(sumo_actor_id)
         
-        # self._player_sumo_id = sumo_actor_id
-        # self.synchronization.ego_sumo_id = sumo_actor_id 
-        # self.synchronization.sumo.player_id = sumo_actor_id
-        # print("Sync dict: ", self.synchronization.carla2sumo_ids)
+        self._player_sumo_id = sumo_actor_id
+        self.synchronization.sumo.player_id = sumo_actor_id
+        print("Sync dict: ", self.synchronization.carla2sumo_ids)
 
     def _add_vehiclepool_vehs_to_synch(self):
 
