@@ -81,6 +81,8 @@ def write_sumocfg_xml(cfg_file, net_file, vtypes_file, viewsettings_file, additi
     ET.SubElement(root, 'num-clients', {'value': str(additional_traci_clients+1)})
 
     tree = ET.ElementTree(root)
+
+    # with open(cfg_file, 'w+') as f:
     tree.write(cfg_file, pretty_print=True, encoding='UTF-8', xml_declaration=True)
 
 
@@ -407,14 +409,16 @@ class TrafficCarlaEnv(object):
         current_map.save_to_disk(xodr_file)
         net_file = os.path.join(tmpdir, current_map.name + '.net.xml')
         netconvert_carla(xodr_file, net_file, guess_tls=True)
-        basedir = os.path.dirname(os.path.realpath(__file__))
-        cfg_file = os.path.join(tmpdir, current_map.name + '.sumocfg')
-        vtypes_file = os.path.join(basedir, 'examples', 'carlavtypes.rou.xml')
-        viewsettings_file = os.path.join(basedir, 'examples', 'viewsettings.xml')
-        write_sumocfg_xml(cfg_file, net_file, vtypes_file, viewsettings_file, 0)
+        basedir = os.path.join("/scratch", "2020_CARLA_challenge", "sumo_integration")
+        cfg_file = os.path.join(basedir,"examples", current_map.name + '.sumocfg')
+
+        if not os.path.isfile(cfg_file): 
+            vtypes_file = os.path.join(basedir, 'examples', 'carlavtypes.rou.xml')
+            viewsettings_file = os.path.join(basedir, 'examples', 'viewsettings.xml')
+            write_sumocfg_xml(cfg_file, net_file, vtypes_file, viewsettings_file, 0)
 
         self.sumo_net = sumolib.net.readNet(net_file)
-        sumo_simulation = SumoSimulation(sumo_cfg_file, args.step_length, args.sumo_host,
+        sumo_simulation = SumoSimulation(cfg_file, args.step_length, args.sumo_host,
                                      args.sumo_port, args.sumo_gui, 1)
         
         
@@ -486,8 +490,8 @@ class TrafficCarlaEnv(object):
             self._clean_up()
 
             # if init == False:
-            self._initialize_npcs(n_vehicles=n_vehicles)
             self._spawn_player()
+            self._initialize_npcs(n_vehicles=n_vehicles)
             
             # for _ in range(ticks):
             #     self.step(warmup=True)
@@ -519,7 +523,7 @@ class TrafficCarlaEnv(object):
             
             for i in range(5):
                 self.step(warmup=True)
-                
+
             transform = candidate.get_transform() 
             if transform.location.z > 0.5 or transform.rotation.roll > 0.:
                 candidate.destroy() 
@@ -546,7 +550,7 @@ class TrafficCarlaEnv(object):
         
         self._player_sumo_id = sumo_actor_id
         self.synchronization.sumo.player_id = sumo_actor_id
-        print("Sync dict: ", self.synchronization.carla2sumo_ids)
+        # print("Sync dict: ", self.synchronization.carla2sumo_ids)
 
     def _add_vehiclepool_vehs_to_synch(self):
 
@@ -576,6 +580,8 @@ class TrafficCarlaEnv(object):
         return self.synchronization.sumo.get_state()
 
     def step(self, control=None, warmup=False):
+        # print("Sync dict: ", self.synchronization.carla2sumo_ids)
+
         if control is not None:
             self._player.apply_control(control)
             
