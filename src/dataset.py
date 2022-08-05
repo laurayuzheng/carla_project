@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import imgaug.augmenters as iaa
 import pandas as pd
+import os 
 
 from torch.utils.data import Dataset
 from torchvision import transforms
@@ -44,7 +45,7 @@ def get_weights(data, key='speed', bins=4):
     return class_weights[classes]
 
 
-def get_dataset(dataset_dir, is_train=True, batch_size=128, num_workers=4, sample_by='none', use_cpu=False, **kwargs):
+def get_dataset(dataset_dir, is_train=True, batch_size=128, num_workers=4, sample_by='none', use_cpu=False, traffic=False, **kwargs):
     data = list()
     transform = transforms.Compose([
         get_augmenter() if is_train else lambda x: x,
@@ -59,7 +60,10 @@ def get_dataset(dataset_dir, is_train=True, batch_size=128, num_workers=4, sampl
         add |= (not is_train and i % 10 >= 9)
 
         if add:
-            data.append(CarlaDataset(_dataset_dir, transform, **kwargs))
+            if traffic: 
+                data.append(TrafficCarlaDataset(_dataset_dir, transform, **kwargs))
+            else:
+                data.append(CarlaDataset(_dataset_dir, transform, **kwargs))
 
     print('%d frames.' % sum(map(len, data)))
 
@@ -125,16 +129,16 @@ def preprocess_semantic(semantic_np):
 
     return topdown
 
-
 class CarlaDataset(Dataset):
     def __init__(self, dataset_dir, transform=transforms.ToTensor()):
         dataset_dir = Path(dataset_dir)
-        measurements = list(sorted((dataset_dir / 'measurements').glob('*.json')))
+        # measurements = list(sorted((dataset_dir / 'measurements').glob('*.json')))
+        measurements = os.path.join(dataset_dir, "measurements.csv")
 
         self.transform = transform
         self.dataset_dir = dataset_dir
         self.frames = list()
-        self.measurements = pd.DataFrame([eval(x.read_text()) for x in measurements])
+        self.measurements = pd.read_csv(measurements)
         self.converter = Converter()
 
         print(dataset_dir)
@@ -144,7 +148,7 @@ class CarlaDataset(Dataset):
 
             assert (dataset_dir / 'rgb_left' / ('%s.png' % frame)).exists()
             assert (dataset_dir / 'rgb_right' / ('%s.png' % frame)).exists()
-            assert (dataset_dir / 'topdown' / ('%s.png' % frame)).exists()
+            assert (dataset_dir / 'map' / ('%s.png' % frame)).exists()
             assert int(frame) < len(self.measurements)
 
             self.frames.append(frame)
@@ -168,7 +172,7 @@ class CarlaDataset(Dataset):
         rgb_right = Image.open(path / 'rgb_right' / ('%s.png' % frame))
         rgb_right = transforms.functional.to_tensor(rgb_right)
 
-        topdown = Image.open(path / 'topdown' / ('%s.png' % frame))
+        topdown = Image.open(path / 'map' / ('%s.png' % frame))
         topdown = topdown.crop((128, 0, 128 + 256, 256))
         topdown = np.array(topdown)
         topdown = preprocess_semantic(topdown)
@@ -199,13 +203,111 @@ class CarlaDataset(Dataset):
         points = torch.clamp(points, 0, 256)
         points = (points / 256) * 2 - 1
 
-        target = np.float32(self.measurements.iloc[i][['x_command', 'y_command']])
+        target = np.float32(self.measurements.iloc[i][['x', 'y']])
         target = R.T.dot(target - u)
         target *= PIXELS_PER_WORLD
         target += [128, 256]
         target = np.clip(target, 0, 256)
         target = torch.FloatTensor(target)
 
+        actions = np.float32(self.measurements.iloc[i][['steer', 'target_speed', 'accel', 'throttle', 'brake']])
+        actions[np.isnan(actions)] = 0.0
+        actions = torch.FloatTensor(actions)
+
+        return torch.cat((rgb, rgb_left, rgb_right)), topdown, points, target, actions, meta
+
+
+class TrafficCarlaDataset(Dataset):
+    def __init__(self, dataset_dir, transform=transforms.ToTensor()):
+        dataset_dir = Path(dataset_dir)
+        # measurements = list(sorted((dataset_dir / 'measurements').glob('*.json')))
+        measurements = os.path.join(dataset_dir, "measurements.csv")
+
+        self.transform = transform
+        self.dataset_dir = dataset_dir
+        self.frames = list()
+        self.measurements = pd.read_csv(measurements)
+        self.converter = Converter()
+
+        print(dataset_dir)
+
+        for image_path in sorted((dataset_dir / 'rgb').glob('*.png')):
+            frame = str(image_path.stem)
+
+            assert (dataset_dir / 'rgb_left' / ('%s.png' % frame)).exists()
+            assert (dataset_dir / 'rgb_right' / ('%s.png' % frame)).exists()
+            assert (dataset_dir / 'map' / ('%s.png' % frame)).exists()
+            assert int(frame) < len(self.measurements)
+
+            self.frames.append(frame)
+
+        assert len(self.frames) > 0, '%s has 0 frames.' % dataset_dir
+
+    def __len__(self):
+        return len(self.frames) - GAP * STEPS
+
+    def __getitem__(self, i):
+        path = self.dataset_dir
+        frame = self.frames[i]
+        meta = '%s %s' % (path.stem, frame)
+
+        rgb = Image.open(path / 'rgb' / ('%s.png' % frame))
+        rgb = transforms.functional.to_tensor(rgb)
+
+        rgb_left = Image.open(path / 'rgb_left' / ('%s.png' % frame))
+        rgb_left = transforms.functional.to_tensor(rgb_left)
+
+        rgb_right = Image.open(path / 'rgb_right' / ('%s.png' % frame))
+        rgb_right = transforms.functional.to_tensor(rgb_right)
+
+        topdown = Image.open(path / 'map' / ('%s.png' % frame))
+        topdown = topdown.crop((128, 0, 128 + 256, 256))
+        topdown = np.array(topdown)
+        topdown = preprocess_semantic(topdown)
+
+        u = np.float32(self.measurements.iloc[i][['x', 'y']])
+        theta = self.measurements.iloc[i]['theta']
+        if np.isnan(theta):
+            theta = 0.0
+        theta = theta + np.pi / 2
+        R = np.array([
+            [np.cos(theta), -np.sin(theta)],
+            [np.sin(theta),  np.cos(theta)],
+            ])
+
+        points = list()
+
+        for skip in range(1, STEPS+1):
+            j = i + GAP * skip
+            v = np.array(self.measurements.iloc[j][['x', 'y']])
+
+            target = R.T.dot(v - u)
+            target *= PIXELS_PER_WORLD
+            target += [128, 256]
+
+            points.append(target)
+
+        points = torch.FloatTensor(np.array(points, dtype=np.float32))
+        points = torch.clamp(points, 0, 256)
+        points = (points / 256) * 2 - 1
+
+        target = np.float32(self.measurements.iloc[i][['x', 'y']])
+        target = R.T.dot(target - u)
+        target *= PIXELS_PER_WORLD
+        target += [128, 256]
+        target = np.clip(target, 0, 256)
+        target = torch.FloatTensor(target)
+
+        traffic_state = self.measurements.iloc[i][['player_lane_state']].tolist()
+        traffic_state = traffic_state[0].strip(' ][').split(',')
+        traffic_state = np.array([float(i) for i in traffic_state], np.float32)
+        traffic_state = np.pad(traffic_state, (0,80-traffic_state.shape[0]), 'constant')
+        # print(traffic_state.shape)
+        traffic_state = torch.FloatTensor(traffic_state)
+        ind_of_player = int(self.measurements.iloc[i][['player_ind_in_lane']])
+
+        # meta = (meta, traffic_state, ind_of_player)
+        # meta = (meta, 0, 0)
         # heatmap = make_heatmap((256, 256), target)
         # heatmap = torch.FloatTensor(heatmap).unsqueeze(0)
 
@@ -213,11 +315,11 @@ class CarlaDataset(Dataset):
         # heatmap_img = make_heatmap((144, 256), command_img)
         # heatmap_img = torch.FloatTensor(heatmap_img).unsqueeze(0)
 
-        actions = np.float32(self.measurements.iloc[i][['steer', 'target_speed', 'accel']])
+        actions = np.float32(self.measurements.iloc[i][['steer', 'target_speed', 'throttle', 'brake']])
         actions[np.isnan(actions)] = 0.0
         actions = torch.FloatTensor(actions)
 
-        return torch.cat((rgb, rgb_left, rgb_right)), topdown, points, target, actions, meta
+        return torch.cat((rgb, rgb_left, rgb_right)), topdown, points, target, actions, meta, traffic_state, ind_of_player
 
 
 if __name__ == '__main__':

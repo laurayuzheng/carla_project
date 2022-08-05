@@ -24,6 +24,9 @@ from flow.utils.registry import env_constructor
 from flow.utils.rllib import FlowParamsEncoder, get_flow_params
 from flow.utils.registry import make_create_env
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
+from flow.controllers.d_car_following_models import IDMStepLayer
+from flow.core import rewards
+
 import torch
 from torch import det
 import numpy as np
@@ -40,7 +43,7 @@ def visualize(batch, out, between, out_cmd, loss_point, loss_cmd, target_heatmap
         _out_cmd = out_cmd[i]
         _between = between[i]
 
-        rgb, topdown, points, target, actions, meta = [x[i] for x in batch]
+        rgb, topdown, points, target, actions, meta, _, _ = [x[i] for x in batch]
 
         _rgb = np.uint8(rgb.detach().cpu().numpy().transpose(1, 2, 0) * 255)
         _target_heatmap = np.uint8(target_heatmap[i].detach().squeeze().cpu().numpy() * 255)
@@ -73,8 +76,8 @@ def visualize(batch, out, between, out_cmd, loss_point, loss_cmd, target_heatmap
         _draw.text((5, 30), 'Command: %.3f' % _loss_cmd)
         _draw.text((5, 50), 'Meta: %s' % meta)
 
-        _draw.text((5, 90), 'Raw: %.3f %.3f' % tuple(actions))
-        _draw.text((5, 110), 'Pred: %.3f %.3f' % tuple(_out_cmd))
+        _draw.text((5, 90), 'Raw: %.3f %.3f %.3f %.3f' % tuple(actions))
+        _draw.text((5, 110), 'Pred: %.3f %.3f %.3f %.3f %.3f' % tuple(_out_cmd))
 
         image = np.array(_topdown).transpose(2, 0, 1)
         images.append((_loss_cmd, torch.ByteTensor(image)))
@@ -87,7 +90,7 @@ def visualize(batch, out, between, out_cmd, loss_point, loss_cmd, target_heatmap
     return result
 
 
-class MapModel(pl.LightningModule):
+class TrafficMapModel(pl.LightningModule):
     def __init__(self, hparams):
         super().__init__()
 
@@ -96,11 +99,12 @@ class MapModel(pl.LightningModule):
         self.to_heatmap = ToHeatmap(hparams.heatmap_radius)
         self.net = SegmentationModel(10, 4, hack=hparams.hack, temperature=hparams.temperature)
         self.controller = RawController(4)
-        constructor, env_name = env_constructor(params=flow_params, version=0)
-        eval_flow_params = flow_params.copy()
-        constructor2, env_name2 = env_constructor(params=eval_flow_params, version=0)
-        self.flow_train_env = constructor() 
-        self.flow_eval_env = constructor2()
+        # constructor, env_name = env_constructor(params=flow_params, version=0)
+        # eval_flow_params = flow_params.copy()
+        # constructor2, env_name2 = env_constructor(params=eval_flow_params, version=1)
+        # self.flow_train_env = constructor() 
+        # self.flow_eval_env = constructor2()
+        self.step_layer = IDMStepLayer.apply
 
     def forward(self, topdown, target, debug=False):
         target_heatmap = self.to_heatmap(target, topdown)[:, None]
@@ -111,25 +115,68 @@ class MapModel(pl.LightningModule):
 
         return out, (target_heatmap,)
 
-    def training_step(self, batch, batch_nb): # img never used in map model
-        img, topdown, points, target, actions, meta = batch
-        out, (target_heatmap,) = self.forward(topdown, target, debug=True)
+    def d_compute_reward(self, state):
+        return rewards.d_desired_velocity(state, 50, fail=False)
 
+    def simstep(self, last_obs, action, player_index):
+        # print(last_obs.size()) 
+        # print(action.size())
+        # print(player_index.size())
+        d_start_state = last_obs
+        d_action = torch.as_tensor(action)
+        d_start_state.requires_grad = True
+        # d_action.requires_grad = True
+        
+        obs_array = [] 
+        rewards = []
+
+        for i in range(d_start_state.size(0)):
+            obs = self.step_layer(d_start_state[i], d_action[i].unsqueeze(0), [player_index[i]], 1, 1, 30, 2, 1, 1, 1.5, 4)
+            obs_array.append(obs.unsqueeze(0))
+            reward = self.d_compute_reward(obs)
+            rewards.append(reward.unsqueeze(0))
+
+        obs_array = torch.cat(obs_array)
+        rewards = torch.cat(rewards)
+        obs_array = obs_array.type_as(last_obs)
+        rewards = rewards.type_as(last_obs)
+
+        return obs_array, rewards
+
+    def training_step(self, batch, batch_nb): # img never used in map model
+        img, topdown, points, target, actions, meta, traffic_state, player_ind = batch
+        # _, traffic_state, player_ind = meta 
+        out, (target_heatmap,) = self.forward(topdown, target, debug=True)
+        
         alpha = torch.rand(out.shape).type_as(out)
         between = alpha * out + (1-alpha) * points # Interpolate between predicted waypoints and ground truth waypoints
-        out_cmd = self.controller(between) # Outputs 2 things
+        out_cmd = self.controller(between) # Outputs 5 things: 'steer', 'target_speed', 'accel', 'throttle', 'brake'
+
+        # print("******************************")
+        # print(out_cmd.size())
+        accel = out_cmd[:, 2] # matters with reward maximization
+        # print(accel.size())
+
+        # out_cmd = torch.cat([out_cmd[:,0:2], out_cmd[:,3:]], dim=1) # remove for command loss: don't want controller and sim to "fight"
+        compute_out_cmd = torch.cat([out_cmd[:,0:2], out_cmd[:,3:]], dim=1)
+        _, reward = self.simstep(traffic_state, accel, player_ind)
+        # print(reward)
+        reward = -1*reward # flip reward for loss (higher reward is better)
 
         loss_point = torch.nn.functional.l1_loss(out, points, reduction='none').mean((1, 2))
-        loss_cmd_raw = torch.nn.functional.l1_loss(out_cmd, actions, reduction='none')
+        loss_cmd_raw = torch.nn.functional.l1_loss(compute_out_cmd, actions, reduction='none')
 
         loss_cmd = loss_cmd_raw.mean(1)
-        loss = (loss_point + self.hparams.command_coefficient * loss_cmd).mean()
+        loss = (loss_point + self.hparams.command_coefficient * loss_cmd + self.hparams.reward_coefficient * reward).mean()
 
         metrics = {
                 'point_loss': loss_point.mean().item(),
                 'cmd_loss': loss_cmd.mean().item(),
                 'loss_steer': loss_cmd_raw[:, 0].mean().item(),
-                'loss_speed': loss_cmd_raw[:, 1].mean().item()
+                'loss_speed': loss_cmd_raw[:, 1].mean().item(), 
+                # 'loss_accel': loss_cmd_raw[:, 2].mean().item(), 
+                'loss_throttle': loss_cmd_raw[:, 2].mean().item(), 
+                'loss_brake': loss_cmd_raw[:, 3].mean().item()
                 }
 
         if batch_nb % 250 == 0:
@@ -140,7 +187,8 @@ class MapModel(pl.LightningModule):
         return {'loss': loss}
 
     def validation_step(self, batch, batch_nb):
-        img, topdown, points, target, actions, meta = batch
+        img, topdown, points, target, actions, meta, traffic_state, player_ind = batch
+        # _, traffic_state, player_ind = meta 
         out, (target_heatmap,) = self.forward(topdown, target, debug=True)
 
         alpha = 0.0
@@ -148,12 +196,20 @@ class MapModel(pl.LightningModule):
         out_cmd = self.controller(between)
         out_cmd_pred = self.controller(out)
 
+        accel = out_cmd_pred[:, 2] # matters with reward maximization
+        compute_out_cmd_pred = torch.cat([out_cmd_pred[:,0:2], out_cmd_pred[:,3:]], dim=1) 
+        compute_out_cmd = torch.cat([out_cmd[:,0:2], out_cmd[:,3:]], dim=1)
+        _, reward = self.simstep(traffic_state, accel, player_ind)
+        # print(reward)
+        reward = -1*reward # flip reward for loss (higher reward is better)
+
+
         loss_point = torch.nn.functional.l1_loss(out, points, reduction='none').mean((1, 2))
-        loss_cmd_raw = torch.nn.functional.l1_loss(out_cmd, actions, reduction='none')
-        loss_cmd_pred_raw = torch.nn.functional.l1_loss(out_cmd_pred, actions, reduction='none')
+        loss_cmd_raw = torch.nn.functional.l1_loss(compute_out_cmd, actions, reduction='none')
+        loss_cmd_pred_raw = torch.nn.functional.l1_loss(compute_out_cmd_pred, actions, reduction='none')
 
         loss_cmd = loss_cmd_raw.mean(1)
-        loss = (loss_point + self.hparams.command_coefficient * loss_cmd).mean()
+        loss = (loss_point + self.hparams.command_coefficient * loss_cmd + self.hparams.reward_coefficient * reward).mean()
 
         if batch_nb == 0:
             self.logger.log_metrics({
@@ -171,6 +227,9 @@ class MapModel(pl.LightningModule):
                 'val_cmd_pred_loss': loss_cmd_pred_raw.mean(1).mean().item(),
                 'val_steer_pred_loss': loss_cmd_pred_raw[:, 0].mean().item(),
                 'val_speed_pred_loss': loss_cmd_pred_raw[:, 1].mean().item(),
+                # 'loss_accel': loss_cmd_raw[:, 2].mean().item(), 
+                'loss_throttle': loss_cmd_raw[:, 2].mean().item(), 
+                'loss_brake': loss_cmd_raw[:, 3].mean().item()
                 }
 
     def validation_epoch_end(self, batch_metrics):
@@ -199,15 +258,15 @@ class MapModel(pl.LightningModule):
         return [optim], [scheduler]
 
     def train_dataloader(self):
-        return get_dataset(self.hparams.dataset_dir, True, self.hparams.batch_size, sample_by=self.hparams.sample_by)
+        return get_dataset(self.hparams.dataset_dir, True, self.hparams.batch_size, sample_by=self.hparams.sample_by, traffic=True)
 
     def val_dataloader(self):
-        return get_dataset(self.hparams.dataset_dir, False, self.hparams.batch_size, sample_by=self.hparams.sample_by)
+        return get_dataset(self.hparams.dataset_dir, False, self.hparams.batch_size, sample_by=self.hparams.sample_by, traffic=True)
 
 
 def main(hparams):
-    model = MapModel(hparams)
-    logger = WandbLogger(id=hparams.id, save_dir=str(hparams.save_dir), project='stage_1')
+    model = TrafficMapModel(hparams)
+    logger = WandbLogger(id=hparams.id, save_dir=str(hparams.save_dir), project='traffic_stage_1')
     checkpoint_callback = ModelCheckpoint(hparams.save_dir, save_top_k=1)
 
     try:
@@ -215,8 +274,10 @@ def main(hparams):
     except:
         resume_from_checkpoint = None
 
+    gpus = 0 if hparams.cpu else -1 
+
     trainer = pl.Trainer(
-            gpus=-1, max_epochs=hparams.max_epochs,
+            gpus=gpus, max_epochs=hparams.max_epochs,
             resume_from_checkpoint=resume_from_checkpoint,
             logger=logger, checkpoint_callback=checkpoint_callback)
 
@@ -234,6 +295,7 @@ if __name__ == '__main__':
     parser.add_argument('--heatmap_radius', type=int, default=5)
     parser.add_argument('--sample_by', type=str, choices=['none', 'even', 'speed', 'steer'], default='even')
     parser.add_argument('--command_coefficient', type=float, default=0.1)
+    parser.add_argument('--reward_coefficient', type=float, default=0.1)
     parser.add_argument('--temperature', type=float, default=10.0)
     parser.add_argument('--hack', action='store_true', default=False)
 
@@ -244,6 +306,7 @@ if __name__ == '__main__':
     # Optimizer args.
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--weight_decay', type=float, default=0.0)
+    parser.add_argument('--cpu', action='store_true', default=False)
 
     parsed = parser.parse_args()
     parsed.save_dir = parsed.save_dir / parsed.id

@@ -557,7 +557,7 @@ class TrafficCarlaEnv(object):
         # self._player.set_simulate_physics(False)
         self._actor_dict['player'].append(self._player)
         # self.traffic_manager.ignore_vehicles_percentage(self._player, 100)
-        self.traffic_manager.set_global_distance_to_leading_vehicle(2.0)
+        self.traffic_manager.set_global_distance_to_leading_vehicle(2.5)
         self.traffic_manager.auto_lane_change(self._player,True)
         self.traffic_manager.ignore_lights_percentage(self._player, 0)
         self.traffic_manager.ignore_signs_percentage(self._player, 0)
