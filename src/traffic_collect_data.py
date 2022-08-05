@@ -30,7 +30,7 @@ DEBUG = False
 WARMUP_STEPS=50
 
 NUM_VEHICLES_TOWN_DICT = {
-    1: 50, 
+    1: 100, 
     4: 300, 
     5: 150, 
     6: 150, 
@@ -174,26 +174,27 @@ def main():
 
                 success = False 
 
-                while not success: 
-                    try: 
-                        with TrafficCarlaEnv(args, town=town) as env:
-                            weather_setting = PRESET_WEATHERS[wi]
-                            env.reset(
-                                    weather=weather_setting,
-                                    ticks=20, 
-                                    # n_vehicles=np.random.choice([100, 130, 200]),
-                                    n_vehicles=args.number_of_vehicles,
-                                    n_pedestrians=np.random.choice([50, 100, 200]),
-                                    seed=np.random.randint(0, 256))
-                            if not args.use_agent:
-                                env._player.set_autopilot(True)
-                            save_path = SAVE_PATH / ('%03d_%s_%s' % (len(list(SAVE_PATH.glob('*'))), town, PRESET_WEATHERS_STRING[wi]))
-                            collect_episode(env, save_path)
-                            env._clean_up()
-                            success = True 
-                    except Exception: # Try again if fails
-                        shutil.rmtree(str(save_path))
-                        pass
+                # while not success: 
+                    # try: 
+                save_path = SAVE_PATH / ('%03d_%s_%s' % (len(list(SAVE_PATH.glob('*'))), town, PRESET_WEATHERS_STRING[wi]))
+                with TrafficCarlaEnv(args, town=town, npc_manager="carla") as env:
+                    weather_setting = PRESET_WEATHERS[wi]
+                    env.reset(
+                            weather=weather_setting,
+                            ticks=20, 
+                            # n_vehicles=np.random.choice([100, 130, 200]),
+                            n_vehicles=args.number_of_vehicles,
+                            n_pedestrians=np.random.choice([50, 100, 200]),
+                            seed=np.random.randint(0, 256))
+                    if not args.use_agent:
+                        env._player.set_autopilot(True)
+                    collect_episode(env, save_path)
+                    env._clean_up()
+                    success = True 
+                    # except Exception: # Try again if fails
+                    #     if os.path.exists(str(save_path)):
+                    #         shutil.rmtree(str(save_path))
+                    #     pass
 
 
 if __name__ == '__main__':

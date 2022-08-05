@@ -269,7 +269,7 @@ class MapCamera(Camera):
 
 
 class VehiclePool(object):
-    def __init__(self, client, n_vehicles):
+    def __init__(self, client, n_vehicles, tm_port):
         self.client = client
         self.world = client.get_world()
 
@@ -280,7 +280,6 @@ class VehiclePool(object):
         for i, transform in enumerate(spawn_points):
             bp = np.random.choice(veh_bp)
             bp.set_attribute('role_name', 'autopilot')
-
             batch.append(
                     carla.command.SpawnActor(bp, transform).then(
                         carla.command.SetAutopilot(carla.command.FutureActor, True)))
@@ -288,7 +287,7 @@ class VehiclePool(object):
         self.vehicles = list()
         errors = set()
 
-        for msg in self.client.apply_batch_sync(batch):
+        for msg in self.client.apply_batch_sync(batch): 
             if msg.error:
                 errors.add(msg.error)
             else:
@@ -296,6 +295,11 @@ class VehiclePool(object):
 
         if errors:
             print('\n'.join(errors))
+
+        # tm_port = self.traffic_manager.get_port()
+        vehicles_list = self.world.get_actors().filter('vehicle.*')
+        for v in vehicles_list:
+            v.set_autopilot(True,tm_port)
 
         print('%d / %d vehicles spawned.' % (len(self.vehicles), n_vehicles))
 
@@ -380,6 +384,7 @@ class TrafficCarlaEnv(object):
     def __init__(self, args,
                 town='Town01', 
                 port=2000, 
+                npc_manager='sumo',
                 **kwargs):
 
         tmpdir = tempfile.mkdtemp()
@@ -402,6 +407,7 @@ class TrafficCarlaEnv(object):
         self.agent = None 
         self.use_agent = args.use_agent
         self._player_sumo_id = None # Need this to get state
+        self.npc_manager = npc_manager
 
         # vehicle, sensor
         self._actor_dict = collections.defaultdict(list)
@@ -433,6 +439,7 @@ class TrafficCarlaEnv(object):
         self.number_of_vehicles = args.number_of_vehicles
 
         self.traffic_manager = self._client.get_trafficmanager(8000)
+        self.traffic_manager.set_synchronous_mode(True)
 
         # self._initialize_npcs(n_vehicles=args.number_of_vehicles)
         
@@ -446,44 +453,50 @@ class TrafficCarlaEnv(object):
         self._world.set_weather(weather)
 
     def _initialize_npcs(self, n_vehicles=10):
+        print("Initializing npcs... ")
         self.number_of_vehicles = n_vehicles
-        # ----------
-        # Blueprints
-        # ----------
-        with open('sumo_integration/vtypes.json') as f:
-            vtypes = json.load(f)['carla_blueprints']
-        blueprints = vtypes.keys()
 
-        filterv = re.compile('vehicle.*')
-        blueprints = list(filter(filterv.search, blueprints))
+        if self.npc_manager == "sumo":
+            # ----------
+            # Blueprints
+            # ----------
+            with open('sumo_integration/vtypes.json') as f:
+                vtypes = json.load(f)['carla_blueprints']
+            blueprints = vtypes.keys()
 
-        if self.safe:
-            blueprints = [
-                x for x in blueprints if vtypes[x]['vClass'] not in ('motorcycle', 'bicycle')
-            ]
-            blueprints = [x for x in blueprints if not x.endswith('isetta')]
-            blueprints = [x for x in blueprints if not x.endswith('carlacola')]
-            blueprints = [x for x in blueprints if not x.endswith('cybertruck')]
-            blueprints = [x for x in blueprints if not x.endswith('t2')]
+            filterv = re.compile('vehicle.*')
+            blueprints = list(filter(filterv.search, blueprints))
 
-        if not blueprints:
-            raise RuntimeError('No blueprints available due to user restrictions.')
+            if self.safe:
+                blueprints = [
+                    x for x in blueprints if vtypes[x]['vClass'] not in ('motorcycle', 'bicycle')
+                ]
+                blueprints = [x for x in blueprints if not x.endswith('isetta')]
+                blueprints = [x for x in blueprints if not x.endswith('carlacola')]
+                blueprints = [x for x in blueprints if not x.endswith('cybertruck')]
+                blueprints = [x for x in blueprints if not x.endswith('t2')]
 
-        # --------------
-        # Spawn vehicles
-        # --------------
-        # Spawns sumo NPC vehicles.
-        sumo_edges = self.sumo_net.getEdges()
+            if not blueprints:
+                raise RuntimeError('No blueprints available due to user restrictions.')
 
-        for i in range(n_vehicles):
-            type_id = random.choice(blueprints)
-            vclass = vtypes[type_id]['vClass']
+            # --------------
+            # Spawn vehicles
+            # --------------
+            # Spawns sumo NPC vehicles.
+            sumo_edges = self.sumo_net.getEdges()
 
-            allowed_edges = [e for e in sumo_edges if e.allows(vclass)]
-            edge = random.choice(allowed_edges)
+            for i in range(n_vehicles):
+                type_id = random.choice(blueprints)
+                vclass = vtypes[type_id]['vClass']
 
-            traci.route.add('route_{}'.format(i), [edge.getID()])
-            traci.vehicle.add('sumo_{}'.format(i), 'route_{}'.format(i), typeID=type_id)
+                allowed_edges = [e for e in sumo_edges if e.allows(vclass)]
+                edge = random.choice(allowed_edges)
+
+                traci.route.add('route_{}'.format(i), [edge.getID()])
+                traci.vehicle.add('sumo_{}'.format(i), 'route_{}'.format(i), typeID=type_id)
+        else: 
+            self._vehicle_pool = VehiclePool(self._client, n_vehicles, self.traffic_manager.get_port())
+            self._add_vehiclepool_vehs_to_synch()
 
 
     def reset(self, weather='random', n_vehicles=10, n_pedestrians=10, seed=0, ticks=10):
@@ -511,12 +524,11 @@ class TrafficCarlaEnv(object):
             self._setup_sensors()
 
             self._set_weather(weather)
-            # self._vehicle_pool = VehiclePool(self._client, n_pedestrians)
-            # self._add_vehiclepool_vehs_to_synch()
 
             is_ready = self.ready()
 
     def _spawn_player(self):
+        print("Now spawning Player vehicle")
         vehicle_bp = np.random.choice(self._blueprints.filter(VEHICLE_NAME))
         vehicle_bp.set_attribute('role_name', 'hero')
 
@@ -546,11 +558,11 @@ class TrafficCarlaEnv(object):
         self._actor_dict['player'].append(self._player)
         # self.traffic_manager.ignore_vehicles_percentage(self._player, 100)
         self.traffic_manager.set_global_distance_to_leading_vehicle(2.0)
-        self.traffic_manager.auto_lane_change(self._player,False)
+        self.traffic_manager.auto_lane_change(self._player,True)
         self.traffic_manager.ignore_lights_percentage(self._player, 0)
         self.traffic_manager.ignore_signs_percentage(self._player, 0)
-        self.traffic_manager.vehicle_percentage_speed_difference(self._player,0)
-        self.traffic_manager.auto_lane_change(self._player, True)
+        # self.traffic_manager.vehicle_percentage_speed_difference(self._player,0)
+        # self.traffic_manager.auto_lane_change(self._player, True)
         
         
         # Manually add the player to SUMO simulation so we can save the id
@@ -566,19 +578,21 @@ class TrafficCarlaEnv(object):
         self._player_sumo_id = sumo_actor_id
         self.synchronization.sumo.player_id = sumo_actor_id
         self.synchronization.carla.player_id = carla_id 
-        # print("Sync dict: ", self.synchronization.carla2sumo_ids)
+        print("Sync dict: ", self.synchronization.carla2sumo_ids)
 
     def _add_vehiclepool_vehs_to_synch(self):
 
         for id in self._vehicle_pool.vehicles:
-            carla_id = id
-            type_id = BridgeHelper.get_sumo_vtype(self._player)
-            color = self._player.attributes.get('color', None) 
+            carla_actor = self.synchronization.carla.get_actor(id)
+            type_id = BridgeHelper.get_sumo_vtype(carla_actor)
+            # color = self._player.attributes.get('color', None) 
+            color = None
             if type_id is not None:
                 sumo_actor_id = self.synchronization.sumo.spawn_actor(type_id, color)
                 if sumo_actor_id != INVALID_ACTOR_ID:
-                    self.synchronization.carla2sumo_ids[carla_id] = sumo_actor_id
+                    self.synchronization.carla2sumo_ids[id] = sumo_actor_id
                     self.synchronization.sumo.subscribe(sumo_actor_id)
+
 
     def ready(self, ticks=10):
         # for _ in range(ticks):
