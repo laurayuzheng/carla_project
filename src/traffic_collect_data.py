@@ -9,6 +9,7 @@ import cv2
 import pandas as pd
 import argparse
 import logging 
+import shutil
 
 from PIL import Image
 
@@ -26,8 +27,16 @@ EPISODES = 10
 FRAME_SKIP = 5
 SAVE_PATH = Path('/scratch/2020_CARLA_challenge/data/traffic_data')
 DEBUG = False
-WARMUP_STEPS=20
+WARMUP_STEPS=50
 
+NUM_VEHICLES_TOWN_DICT = {
+    1: 50, 
+    4: 300, 
+    5: 150, 
+    6: 150, 
+    10: 150
+
+}
 
 def collect_episode(env, save_dir):
     save_dir.mkdir()
@@ -99,7 +108,7 @@ def main():
                            help='TCP port to listen to (default: 8813)')
     argparser.add_argument('--sumo-gui', action='store_true', help='run the gui version of sumo')
     argparser.add_argument('--step-length',
-                           default=1/10,
+                           default=1/20,
                            type=float,
                            help='set fixed delta seconds (default: 0.05s)')
     argparser.add_argument('--client-order',
@@ -120,7 +129,7 @@ def main():
                            type=str, 
                            choices=['none', 'sumo', 'carla'], 
                            help="select traffic light manager (default: none)", 
-                           default='sumo') 
+                           default='carla') 
     argparser.add_argument('-n', 
                            '--number-of-vehicles', 
                            metavar='N', 
@@ -130,6 +139,9 @@ def main():
     argparser.add_argument('--safe', 
                            action='store_true', 
                            help='avoid spawning vehicles prone to accidents') 
+    argparser.add_argument('--use-agent', 
+                           action='store_true', 
+                           help='use CARLA AI')
 
     argparser.add_argument('--debug', action='store_true', help='enable debug messages')
     args = argparser.parse_args()
@@ -145,27 +157,43 @@ def main():
 
     np.random.seed(0)
     
-    for nv in [80, 150]:
-        args.number_of_vehicles = nv
-        for wi in [1, 8, 12]:
-            for i in [7]: # [1, 4, 5]:
-                for episode in range(EPISODES):
-                    if i == 10:
-                        town = 'Town10HD'
-                    else:
-                        town = f'Town{i:02d}'
-                    with TrafficCarlaEnv(args, town=town) as env:
-                        weather_setting = PRESET_WEATHERS[wi]
-                        env.reset(
-                                weather=weather_setting,
-                                ticks=20, 
-                                # n_vehicles=np.random.choice([100, 130, 200]),
-                                n_vehicles=args.number_of_vehicles,
-                                n_pedestrians=np.random.choice([50, 100, 200]),
-                                seed=np.random.randint(0, 256))
-                        env._player.set_autopilot(True)
-                        collect_episode(env, SAVE_PATH / ('%03d_%s_%s' % (len(list(SAVE_PATH.glob('*'))), town, PRESET_WEATHERS_STRING[wi])))
-                        env._clean_up()
+    # for nv in [80, 150]:
+    #     args.number_of_vehicles = nv
+    for wi in [1, 8, 12]:
+        for i in [1, 4, 5, 10]: # [3, 4, 5, 6, 10]:
+            if i == 1:
+                args.safe = True 
+
+            for episode in range(EPISODES):
+                if i == 10:
+                    town = 'Town10HD'
+                else:
+                    town = f'Town{i:02d}'
+
+                args.number_of_vehicles = NUM_VEHICLES_TOWN_DICT[i]
+
+                success = False 
+
+                while not success: 
+                    try: 
+                        with TrafficCarlaEnv(args, town=town) as env:
+                            weather_setting = PRESET_WEATHERS[wi]
+                            env.reset(
+                                    weather=weather_setting,
+                                    ticks=20, 
+                                    # n_vehicles=np.random.choice([100, 130, 200]),
+                                    n_vehicles=args.number_of_vehicles,
+                                    n_pedestrians=np.random.choice([50, 100, 200]),
+                                    seed=np.random.randint(0, 256))
+                            if not args.use_agent:
+                                env._player.set_autopilot(True)
+                            save_path = SAVE_PATH / ('%03d_%s_%s' % (len(list(SAVE_PATH.glob('*'))), town, PRESET_WEATHERS_STRING[wi]))
+                            collect_episode(env, save_path)
+                            env._clean_up()
+                            success = True 
+                    except Exception: # Try again if fails
+                        shutil.rmtree(str(save_path))
+                        pass
 
 
 if __name__ == '__main__':

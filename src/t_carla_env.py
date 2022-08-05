@@ -17,6 +17,8 @@ import traci
 import random 
 
 from PIL import Image, ImageDraw
+from agents.navigation.behavior_agent import BehaviorAgent
+from agents.navigation.basic_agent import BasicAgent
 
 from sumo_integration.bridge_helper import BridgeHelper  # pylint: disable=wrong-import-position
 from sumo_integration.carla_simulation import CarlaSimulation  # pylint: disable=wrong-import-position
@@ -397,6 +399,8 @@ class TrafficCarlaEnv(object):
 
         self._tick = 0
         self._player = None
+        self.agent = None 
+        self.use_agent = args.use_agent
         self._player_sumo_id = None # Need this to get state
 
         # vehicle, sensor
@@ -412,10 +416,10 @@ class TrafficCarlaEnv(object):
         basedir = os.path.join("/scratch", "2020_CARLA_challenge", "sumo_integration")
         cfg_file = os.path.join(basedir,"examples", current_map.name + '.sumocfg')
 
-        if not os.path.isfile(cfg_file): 
-            vtypes_file = os.path.join(basedir, 'examples', 'carlavtypes.rou.xml')
-            viewsettings_file = os.path.join(basedir, 'examples', 'viewsettings.xml')
-            write_sumocfg_xml(cfg_file, net_file, vtypes_file, viewsettings_file, 0)
+        # if not os.path.isfile(cfg_file): 
+        vtypes_file = os.path.join(basedir, 'examples', 'carlavtypes.rou.xml')
+        viewsettings_file = os.path.join(basedir, 'examples', 'viewsettings.xml')
+        write_sumocfg_xml(cfg_file, net_file, vtypes_file, viewsettings_file, 0)
 
         self.sumo_net = sumolib.net.readNet(net_file)
         sumo_simulation = SumoSimulation(cfg_file, args.step_length, args.sumo_host,
@@ -427,6 +431,8 @@ class TrafficCarlaEnv(object):
 
         self.safe = args.safe 
         self.number_of_vehicles = args.number_of_vehicles
+
+        self.traffic_manager = self._client.get_trafficmanager(8000)
 
         # self._initialize_npcs(n_vehicles=args.number_of_vehicles)
         
@@ -535,8 +541,17 @@ class TrafficCarlaEnv(object):
 
         # sumo_id, carla_id = random.choice(list(self.synchronization.sumo2carla_ids.items()))
         # self._player = self._world.get_actor(carla_id) 
-
+        self.agent = BasicAgent(self._player)
+        # self._player.set_simulate_physics(False)
         self._actor_dict['player'].append(self._player)
+        # self.traffic_manager.ignore_vehicles_percentage(self._player, 100)
+        self.traffic_manager.set_global_distance_to_leading_vehicle(2.0)
+        self.traffic_manager.auto_lane_change(self._player,False)
+        self.traffic_manager.ignore_lights_percentage(self._player, 0)
+        self.traffic_manager.ignore_signs_percentage(self._player, 0)
+        self.traffic_manager.vehicle_percentage_speed_difference(self._player,0)
+        self.traffic_manager.auto_lane_change(self._player, True)
+        
         
         # Manually add the player to SUMO simulation so we can save the id
         carla_id = self._player.id 
@@ -550,6 +565,7 @@ class TrafficCarlaEnv(object):
         
         self._player_sumo_id = sumo_actor_id
         self.synchronization.sumo.player_id = sumo_actor_id
+        self.synchronization.carla.player_id = carla_id 
         # print("Sync dict: ", self.synchronization.carla2sumo_ids)
 
     def _add_vehiclepool_vehs_to_synch(self):
@@ -579,11 +595,11 @@ class TrafficCarlaEnv(object):
         '''Get the state of the driver's lane'''
         return self.synchronization.sumo.get_state()
 
-    def step(self, control=None, warmup=False):
+    def step(self, warmup=False):
         # print("Sync dict: ", self.synchronization.carla2sumo_ids)
 
-        if control is not None:
-            self._player.apply_control(control)
+        if self.agent and self.use_agent and not warmup:
+            self._player.apply_control(self.agent.run_step())
             
         self.synchronization.tick() 
 
