@@ -27,6 +27,9 @@ from sumo_integration.sumo_simulation import SumoSimulation  # pylint: disable=w
 
 from .run_synchronization import SimulationSynchronization
 
+PROJECT_ROOT = "/scratch/2020_CARLA_challenge"
+CARLA_HOME = "/home/laura/DrivingSimulators/CARLA_0.9.10"
+
 PRESET_WEATHERS = {
     1: carla.WeatherParameters.ClearNoon,
     2: carla.WeatherParameters.CloudyNoon,
@@ -387,8 +390,8 @@ class TrafficCarlaEnv(object):
                 npc_manager='sumo',
                 **kwargs):
 
-        tmpdir = tempfile.mkdtemp()
-        sumo_cfg_file = os.path.join("sumo_integration", "examples", town+".sumocfg")
+        # tmpdir = os.path.join(PROJECT_ROOT, "maps")
+        # sumo_cfg_file = os.path.join("sumo_integration", "examples", town+".sumocfg")
         
         carla_simulation = CarlaSimulation(args.carla_host, args.carla_port, args.step_length)
         self._client = carla_simulation.client
@@ -415,17 +418,20 @@ class TrafficCarlaEnv(object):
 
         # For spawning npcs (from spawn_npc_sumo.py)
         current_map = self._map
-        xodr_file = os.path.join(tmpdir, current_map.name + '.xodr')
-        current_map.save_to_disk(xodr_file)
-        net_file = os.path.join(tmpdir, current_map.name + '.net.xml')
-        netconvert_carla(xodr_file, net_file, guess_tls=True)
-        basedir = os.path.join("/scratch", "2020_CARLA_challenge", "sumo_integration")
+        # xodr_file = os.path.join(tmpdir, current_map.name + '.xodr')
+        xodr_file = os.path.join(CARLA_HOME, "CarlaUE4/Content/Carla/Maps/OpenDrive", current_map.name+'.xodr')
+        # current_map.save_to_disk(xodr_file)
+        net_file = os.path.join(PROJECT_ROOT, "sumo_integration", "examples", "net", current_map.name + '.net.xml')
+
+        if not os.path.isfile(net_file):
+            netconvert_carla(xodr_file, net_file, guess_tls=True)
+        basedir = os.path.join(PROJECT_ROOT, "sumo_integration")
         cfg_file = os.path.join(basedir,"examples", current_map.name + '.sumocfg')
 
-        # if not os.path.isfile(cfg_file): 
-        vtypes_file = os.path.join(basedir, 'examples', 'carlavtypes.rou.xml')
-        viewsettings_file = os.path.join(basedir, 'examples', 'viewsettings.xml')
-        write_sumocfg_xml(cfg_file, net_file, vtypes_file, viewsettings_file, 0)
+        if not os.path.isfile(cfg_file): 
+            vtypes_file = os.path.join(basedir, 'examples', 'carlavtypes.rou.xml')
+            viewsettings_file = os.path.join(basedir, 'examples', 'viewsettings.xml')
+            write_sumocfg_xml(cfg_file, net_file, vtypes_file, viewsettings_file, 0)
 
         self.sumo_net = sumolib.net.readNet(net_file)
         sumo_simulation = SumoSimulation(cfg_file, args.step_length, args.sumo_host,
@@ -661,7 +667,8 @@ class TrafficCarlaEnv(object):
                     'speed': np.linalg.norm([velocity.x, velocity.y, velocity.z]),
                     'accel': np.linalg.norm([acceleration.x, acceleration.y, acceleration.z]),
                     'player_lane_state': state, 
-                    'player_ind_in_lane': player_ind
+                    'player_ind_in_lane': player_ind, 
+                    'fuel_consumption': self.synchronization.sumo.get_playerlane_fuel_consumption()
                 })
 
         return result

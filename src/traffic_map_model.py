@@ -19,13 +19,8 @@ from . import common
 
 import gym
 
-from flow.core.util import ensure_dir
-from flow.utils.registry import env_constructor
-from flow.utils.rllib import FlowParamsEncoder, get_flow_params
-from flow.utils.registry import make_create_env
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
-from flow.controllers.d_car_following_models import IDMStepLayer
-from flow.core import rewards
+from .traffic.d_car_following_models import IDMStepLayer
+from .traffic.rewards import *
 
 import torch
 from torch import det
@@ -116,16 +111,12 @@ class TrafficMapModel(pl.LightningModule):
         return out, (target_heatmap,)
 
     def d_compute_reward(self, state):
-        return rewards.d_desired_velocity(state, 50, fail=False)
+        return d_desired_velocity(state, 50, fail=False)
 
     def simstep(self, last_obs, action, player_index):
-        # print(last_obs.size()) 
-        # print(action.size())
-        # print(player_index.size())
         d_start_state = last_obs
         d_action = torch.as_tensor(action)
         d_start_state.requires_grad = True
-        # d_action.requires_grad = True
         
         obs_array = [] 
         rewards = []

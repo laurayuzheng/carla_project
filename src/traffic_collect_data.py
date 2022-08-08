@@ -22,7 +22,7 @@ else:
     sys.exit("please declare environment variable 'SUMO_HOME'")
 
 
-EPISODE_LENGTH = 1000
+EPISODE_LENGTH = 500
 EPISODES = 10
 FRAME_SKIP = 5
 SAVE_PATH = Path('/scratch/2020_CARLA_challenge/data/traffic_data')
@@ -31,8 +31,8 @@ WARMUP_STEPS=50
 
 NUM_VEHICLES_TOWN_DICT = {
     1: 100, 
-    3: 200,
-    4: 300, 
+    3: 100,
+    4: 150, 
     5: 150, 
     6: 150, 
     7: 100, 
@@ -110,7 +110,7 @@ def main():
                            help='TCP port to listen to (default: 8813)')
     argparser.add_argument('--sumo-gui', action='store_true', help='run the gui version of sumo')
     argparser.add_argument('--step-length',
-                           default=1/20,
+                           default=1/10,
                            type=float,
                            help='set fixed delta seconds (default: 0.05s)')
     argparser.add_argument('--client-order',
@@ -163,6 +163,9 @@ def main():
     #     args.number_of_vehicles = nv
     for wi in [1, 8, 12]:
         for i in [1, 4, 5, 10]: # [3, 4, 5, 6, 10]:
+            # if i == 1 and wi == 1: 
+            #     continue 
+
             args.safe = True 
 
             for episode in range(EPISODES):
@@ -175,30 +178,30 @@ def main():
 
                 success = False 
 
-                while not success: 
-                    env = None 
-                    try: 
-                        save_path = SAVE_PATH / ('%03d_%s_%s' % (len(list(SAVE_PATH.glob('*'))), town, PRESET_WEATHERS_STRING[wi]))
-                        env = TrafficCarlaEnv(args, town=town, npc_manager="carla")
-                        weather_setting = PRESET_WEATHERS[wi]
-                        env.reset(
-                                weather=weather_setting,
-                                ticks=20, 
-                                # n_vehicles=np.random.choice([100, 130, 200]),
-                                n_vehicles=args.number_of_vehicles,
-                                n_pedestrians=np.random.choice([50, 100, 200]),
-                                seed=np.random.randint(0, 256))
-                        if not args.use_agent:
-                            env._player.set_autopilot(True)
-                        collect_episode(env, save_path)
-                        env._clean_up()
-                        success = True 
-                    except Exception: # Try again if fails
-                        if env: 
-                            env._clean_up()
-                        if os.path.exists(str(save_path)):
-                            shutil.rmtree(str(save_path))
-                        pass
+                # while not success: 
+                #     env = None 
+                #     try: 
+                save_path = SAVE_PATH / ('%03d_%s_%s' % (len(list(SAVE_PATH.glob('*'))), town, PRESET_WEATHERS_STRING[wi]))
+                with TrafficCarlaEnv(args, town=town, npc_manager="carla") as env:
+                    weather_setting = PRESET_WEATHERS[wi]
+                    env.reset(
+                            weather=weather_setting,
+                            ticks=20, 
+                            # n_vehicles=np.random.choice([100, 130, 200]),
+                            n_vehicles=args.number_of_vehicles,
+                            n_pedestrians=np.random.choice([50, 100, 200]),
+                            seed=np.random.randint(0, 256))
+                    if not args.use_agent:
+                        env._player.set_autopilot(True)
+                    collect_episode(env, save_path)
+                    env._clean_up()
+                    success = True 
+                    # except Exception: # Try again if fails
+                    #     if env: 
+                    #         env._clean_up()
+                    #     if os.path.exists(str(save_path)):
+                    #         shutil.rmtree(str(save_path))
+                    #     pass
 
 
 if __name__ == '__main__':
