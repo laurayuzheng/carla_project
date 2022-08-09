@@ -157,9 +157,9 @@ class TrafficMapModel(pl.LightningModule):
 
         # out_cmd = torch.cat([out_cmd[:,0:2], out_cmd[:,3:]], dim=1) # remove for command loss: don't want controller and sim to "fight"
         compute_out_cmd = out_cmd[:,0:1]
-        state, reward = self.simstep(traffic_state, accel, player_ind)
+        states, reward = self.simstep(traffic_state, accel, player_ind)
         # print(reward)
-        average_velocity = state[1::2].mean()
+        obs_velocities = states[:,1::2].mean(1)
         reward = -1*reward # flip reward for loss (higher reward is better)
 
         loss_point = torch.nn.functional.l1_loss(out, points, reduction='none').mean((1, 2))
@@ -173,7 +173,7 @@ class TrafficMapModel(pl.LightningModule):
                 'point_loss': loss_point.mean().item(),
                 # 'cmd_loss': loss_cmd.mean().item(),
                 'loss_steer': loss_cmd.mean().item(),
-                'next_state_avg_vel': average_velocity.item(),
+                'next_state_avg_vel': obs_velocities.mean().item(),
                 # 'loss_speed': loss_cmd_raw[:, 1].mean().item(), 
                 # 'loss_accel': loss_cmd_raw[:, 2].mean().item(), 
                 # 'loss_throttle': loss_cmd_raw[:, 2].mean().item(), 
@@ -205,8 +205,8 @@ class TrafficMapModel(pl.LightningModule):
 
         compute_out_cmd_pred = out_cmd_pred[:,0:1]
         compute_out_cmd = out_cmd[:,0:1]
-        state, reward = self.simstep(traffic_state, accel, player_ind)
-        average_velocity = state[1::2].mean()
+        states, reward = self.simstep(traffic_state, accel, player_ind)
+        obs_velocities = states[:,1::2].mean(1)
         reward = -1*reward # flip reward for loss (higher reward is better)
 
 
@@ -233,7 +233,7 @@ class TrafficMapModel(pl.LightningModule):
                 # 'val_cmd_pred_loss': loss_cmd_pred_raw.mean(1).mean().item(),
                 'val_steer_pred_loss': loss_cmd_pred_raw[:, 0].mean().item(), 
                 # 'predicted_target_speed': target_speeds.mean().item(),
-                'next_state_avg_vel': average_velocity.item(),
+                'next_state_avg_vel': obs_velocities.mean().item(),
                 # 'val_speed_pred_loss': loss_cmd_pred_raw[:, 1].mean().item(),
                 # 'loss_accel': loss_cmd_raw[:, 2].mean().item(), 
                 # 'loss_throttle': loss_cmd_raw[:, 2].mean().item(), 
