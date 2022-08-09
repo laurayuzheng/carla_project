@@ -315,7 +315,7 @@ class TrafficCarlaDataset(Dataset):
         # heatmap_img = make_heatmap((144, 256), command_img)
         # heatmap_img = torch.FloatTensor(heatmap_img).unsqueeze(0)
 
-        actions = np.float32(self.measurements.iloc[i][['steer', 'target_speed', 'throttle', 'brake']])
+        actions = np.float32(self.measurements.iloc[i][['steer', 'speed']]) # We can use accel to determine target speed
         actions[np.isnan(actions)] = 0.0
         actions = torch.FloatTensor(actions)
 

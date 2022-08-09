@@ -32,7 +32,7 @@ WARMUP_STEPS=50
 NUM_VEHICLES_TOWN_DICT = {
     1: 100, 
     3: 100,
-    4: 150, 
+    4: 200, 
     5: 150, 
     6: 150, 
     7: 100, 
@@ -161,8 +161,8 @@ def main():
     
     # for nv in [80, 150]:
     #     args.number_of_vehicles = nv
-    for wi in [1, 8, 12]:
-        for i in [1, 4, 5, 10]: # [3, 4, 5, 6, 10]:
+    for wi in [1]: #  8, 12
+        for i in [5, 10]: # [1, 4, 5, 10]:
             # if i == 1 and wi == 1: 
             #     continue 
 
@@ -182,7 +182,7 @@ def main():
                 #     env = None 
                 #     try: 
                 save_path = SAVE_PATH / ('%03d_%s_%s' % (len(list(SAVE_PATH.glob('*'))), town, PRESET_WEATHERS_STRING[wi]))
-                with TrafficCarlaEnv(args, town=town, npc_manager="carla") as env:
+                with TrafficCarlaEnv(args, town=town, npc_manager="sumo") as env:
                     weather_setting = PRESET_WEATHERS[wi]
                     env.reset(
                             weather=weather_setting,

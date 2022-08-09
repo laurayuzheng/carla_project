@@ -136,7 +136,7 @@ def d_average_velocity(state, fail=False):
     if any(vel < -100) or fail or num_vehicles == 0:
         return 0.
 
-    return torch.unsqueeze(torch.mean(vel))
+    return torch.unsqueeze(torch.mean(vel), dim=0)
 
 def average_velocity(env, fail=False):
     """Encourage proximity to an average velocity.
