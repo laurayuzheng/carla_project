@@ -32,11 +32,15 @@ CONVERTER = np.uint8([
 
 
 COLOR = np.uint8([
-        (  0,   0,   0),    # unlabeled
+        # (  0,   0,   0),    # unlabeled
+        (255, 255, 255),    # unlabeled
         (220,  20,  60),    # ped
-        (157, 234,  50),    # road line
-        (128,  64, 128),    # road
-        (244,  35, 232),    # sidewalk
+        # (157, 234,  50),    # road line
+        (255, 255,  0),    # road line
+        # (128,  64, 128),    # road
+        (169, 169, 169),    # road
+        # (244,  35, 232),    # sidewalk
+        (255, 222, 173),    # sidewalk
         (  0,   0, 142),    # car
         (255,   0,   0),    # red light
         (255, 255,   0),    # yellow light

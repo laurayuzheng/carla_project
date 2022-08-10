@@ -8,11 +8,11 @@ from PIL import Image, ImageDraw
 
 from .dataset import CarlaDataset
 from .converter import Converter
-from .map_model import MapModel
+from .traffic_map_model import TrafficMapModel
 from . import common
 
 
-net = MapModel.load_from_checkpoint(sys.argv[1])
+net = TrafficMapModel.load_from_checkpoint(sys.argv[1])
 net.cuda()
 net.eval()
 

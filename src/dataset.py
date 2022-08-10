@@ -361,14 +361,14 @@ if __name__ == '__main__':
         _draw_map = ImageDraw.Draw(_topdown)
         _draw_rgb = ImageDraw.Draw(_rgb)
 
-        for x, y in points_unnormalized:
-            _draw_map.ellipse((x-2, y-2, x+2, y+2), (255, 0, 0))
+        # for x, y in points_unnormalized:
+        #     _draw_map.ellipse((x-2, y-2, x+2, y+2), (255, 0, 0))
 
-        for x, y in converter.cam_to_map(points_cam):
-            _draw_map.ellipse((x-1, y-1, x+1, y+1), (0, 255, 0))
+        # for x, y in converter.cam_to_map(points_cam):
+        #     _draw_map.ellipse((x-1, y-1, x+1, y+1), (0, 255, 0))
 
-        for x, y in points_cam:
-            _draw_rgb.ellipse((x-2, y-2, x+2, y+2), (255, 0, 0))
+        # for x, y in points_cam:
+        #     _draw_rgb.ellipse((x-2, y-2, x+2, y+2), (255, 0, 0))
 
         _topdown.thumbnail(_rgb.size)
 
