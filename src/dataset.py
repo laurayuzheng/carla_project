@@ -226,13 +226,14 @@ class CarlaDataset(Dataset):
 class TrafficCarlaDataset(Dataset):
     def __init__(self, dataset_dir, transform=transforms.ToTensor()):
         dataset_dir = Path(dataset_dir)
-        # measurements = list(sorted((dataset_dir / 'measurements').glob('*.json')))
-        measurements = os.path.join(dataset_dir, "measurements.csv")
+        measurements = list(sorted((dataset_dir / 'measurements').glob('*.json')))
+        # measurements = os.path.join(dataset_dir, "measurements.csv")
 
         self.transform = transform
         self.dataset_dir = dataset_dir
         self.frames = list()
-        self.measurements = pd.read_csv(measurements)
+        # self.measurements = pd.read_csv(measurements)
+        self.measurements = pd.DataFrame([eval(x.read_text()) for x in measurements])
         self.converter = Converter()
 
         print(dataset_dir)
