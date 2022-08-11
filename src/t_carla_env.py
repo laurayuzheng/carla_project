@@ -25,6 +25,8 @@ from sumo_integration.carla_simulation import CarlaSimulation  # pylint: disable
 from sumo_integration.constants import INVALID_ACTOR_ID  # pylint: disable=wrong-import-position
 from sumo_integration.sumo_simulation import SumoSimulation  # pylint: disable=wrong-import-position
 
+# from leaderboard.team_code.auto_pilot import AutoPilot
+
 from .run_synchronization import SimulationSynchronization
 
 PROJECT_ROOT = "/scratch/2020_CARLA_challenge"

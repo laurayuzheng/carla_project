@@ -166,7 +166,7 @@ def main():
     # for nv in [80, 150]:
     #     args.number_of_vehicles = nv
     # for wi in [1]: #  8, 12
-    for i in [10]: # [1, 4, 5, 10]:
+    for i in [5]: # [1, 4, 5, 10]:
         # if i == 1 and wi == 1: 
         #     continue 
 
