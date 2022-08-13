@@ -243,7 +243,7 @@ class TrafficCarlaDataset(Dataset):
 
             assert (dataset_dir / 'rgb_left' / ('%s.png' % frame)).exists()
             assert (dataset_dir / 'rgb_right' / ('%s.png' % frame)).exists()
-            assert (dataset_dir / 'map' / ('%s.png' % frame)).exists()
+            assert (dataset_dir / 'topdown' / ('%s.png' % frame)).exists()
             assert int(frame) < len(self.measurements)
 
             self.frames.append(frame)
@@ -267,7 +267,7 @@ class TrafficCarlaDataset(Dataset):
         rgb_right = Image.open(path / 'rgb_right' / ('%s.png' % frame))
         rgb_right = transforms.functional.to_tensor(rgb_right)
 
-        topdown = Image.open(path / 'map' / ('%s.png' % frame))
+        topdown = Image.open(path / 'topdown' / ('%s.png' % frame))
         topdown = topdown.crop((128, 0, 128 + 256, 256))
         topdown = np.array(topdown)
         topdown = preprocess_semantic(topdown)
@@ -306,9 +306,11 @@ class TrafficCarlaDataset(Dataset):
         target = torch.FloatTensor(target)
 
         traffic_state = self.measurements.iloc[i][['player_lane_state']].tolist()
-        traffic_state = traffic_state[0].strip(' ][').split(',')
-        traffic_state = np.array([float(i) for i in traffic_state], np.float32)
-        traffic_state = np.pad(traffic_state, (0,80-traffic_state.shape[0]), 'constant')
+        traffic_state = np.array(traffic_state).squeeze()
+        num_veh = len(traffic_state) // 2 
+        # print(num_veh)
+        # print(traffic_state)
+        traffic_state = np.pad(traffic_state, (0,50-traffic_state.shape[0]), 'constant')
         # print(traffic_state.shape)
         traffic_state = torch.FloatTensor(traffic_state)
         ind_of_player = int(self.measurements.iloc[i][['player_ind_in_lane']])
@@ -326,7 +328,7 @@ class TrafficCarlaDataset(Dataset):
         actions[np.isnan(actions)] = 0.0
         actions = torch.FloatTensor(actions)
 
-        return torch.cat((rgb, rgb_left, rgb_right)), topdown, points, target, actions, meta, traffic_state, ind_of_player
+        return torch.cat((rgb, rgb_left, rgb_right)), topdown, points, target, actions, meta, traffic_state, ind_of_player, num_veh
 
 
 if __name__ == '__main__':

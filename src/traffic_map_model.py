@@ -38,7 +38,7 @@ def visualize(batch, out, between, out_cmd, loss_point, loss_cmd, target_heatmap
         _out_cmd = out_cmd[i]
         _between = between[i]
 
-        rgb, topdown, points, target, actions, meta, _, _ = [x[i] for x in batch]
+        rgb, topdown, points, target, actions, meta, _, _, _ = [x[i] for x in batch]
 
         _rgb = np.uint8(rgb.detach().cpu().numpy().transpose(1, 2, 0) * 255)
         _target_heatmap = np.uint8(target_heatmap[i].detach().squeeze().cpu().numpy() * 255)
@@ -116,7 +116,7 @@ class TrafficMapModel(pl.LightningModule):
         else: 
             return d_desired_velocity(state, 50, fail=False)
 
-    def simstep(self, last_obs, action, player_index):
+    def simstep(self, last_obs, action, player_index, num_veh):
         d_start_state = last_obs
         d_action = torch.as_tensor(action)
         d_start_state.requires_grad = True
@@ -125,7 +125,9 @@ class TrafficMapModel(pl.LightningModule):
         rewards = []
 
         for i in range(d_start_state.size(0)):
-            obs = self.step_layer(d_start_state[i], d_action[i].unsqueeze(0), [player_index[i]], 1, 1, 30, 2, 1, 1, 1.5, 4)
+            vehicles = int(num_veh[i])
+            curr_state = d_start_state[i, 0:vehicles*2] # truncate padded state
+            obs = self.step_layer(curr_state, d_action[i].unsqueeze(0), [player_index[i]], 1, 1, 30, 2, 1, 1, 1.5, 4)
             obs_array.append(obs.unsqueeze(0))
             reward = self.d_compute_reward(obs)
             rewards.append(reward.unsqueeze(0))
@@ -138,10 +140,11 @@ class TrafficMapModel(pl.LightningModule):
         return obs_array, rewards
 
     def training_step(self, batch, batch_nb): # img never used in map model
-        img, topdown, points, target, actions, meta, traffic_state, player_ind = batch
+        img, topdown, points, target, actions, meta, traffic_state, player_ind, num_veh = batch
         # _, traffic_state, player_ind = meta 
         steer_actions = actions[:,0:1]
         current_speed = actions[:,1]
+        # traffic_state = traffic_state[:, 0:int(num_veh)*2] # Get the proper traffic state, dataloader is zero padded
 
         out, (target_heatmap,) = self.forward(topdown, target, debug=True)
         
@@ -157,7 +160,7 @@ class TrafficMapModel(pl.LightningModule):
 
         # out_cmd = torch.cat([out_cmd[:,0:2], out_cmd[:,3:]], dim=1) # remove for command loss: don't want controller and sim to "fight"
         compute_out_cmd = out_cmd[:,0:1]
-        states, reward = self.simstep(traffic_state, accel, player_ind)
+        states, reward = self.simstep(traffic_state, accel, player_ind, num_veh)
         # print(reward)
         obs_velocities = states[:,1::2].mean(1)
         reward = -1*reward # flip reward for loss (higher reward is better)
@@ -189,9 +192,11 @@ class TrafficMapModel(pl.LightningModule):
         return {'loss': loss}
 
     def validation_step(self, batch, batch_nb):
-        img, topdown, points, target, actions, meta, traffic_state, player_ind = batch
+        img, topdown, points, target, actions, meta, traffic_state, player_ind, num_veh = batch
         steer_actions = actions[:,0:1]
         current_speed = actions[:,1]
+        # traffic_state = traffic_state[:, 0:int(num_veh)*2] # Get the proper traffic state, dataloader is zero padded
+
         # _, traffic_state, player_ind = meta 
         out, (target_heatmap,) = self.forward(topdown, target, debug=True)
 
@@ -205,7 +210,7 @@ class TrafficMapModel(pl.LightningModule):
 
         compute_out_cmd_pred = out_cmd_pred[:,0:1]
         compute_out_cmd = out_cmd[:,0:1]
-        states, reward = self.simstep(traffic_state, accel, player_ind)
+        states, reward = self.simstep(traffic_state, accel, player_ind, num_veh)
         obs_velocities = states[:,1::2].mean(1)
         reward = -1*reward # flip reward for loss (higher reward is better)
 
