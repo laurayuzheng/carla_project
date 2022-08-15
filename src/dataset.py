@@ -65,13 +65,16 @@ def get_dataset(dataset_dir, is_train=True, batch_size=128, num_workers=4, sampl
             else:
                 data.append(CarlaDataset(_dataset_dir, transform, **kwargs))
 
+    num_frames = sum(map(len,data))
+    num_samples = num_frames // batch_size + 1 
+    num_samples_val = num_samples // 10
     print('%d frames.' % sum(map(len, data)))
 
     weights = torch.DoubleTensor(get_weights(data, key=sample_by))
     sampler = torch.utils.data.sampler.WeightedRandomSampler(weights, len(weights))
     data = torch.utils.data.ConcatDataset(data)
 
-    return Wrap(data, sampler, batch_size, 1000 if is_train else 100, num_workers, use_cpu)
+    return Wrap(data, sampler, batch_size, num_samples if is_train else num_samples_val, num_workers, use_cpu)
 
 
 def get_augmenter():
@@ -198,7 +201,7 @@ class CarlaDataset(Dataset):
 
             points.append(target)
 
-        points = torch.FloatTensor(points)
+        points = torch.FloatTensor(np.array(points, dtype=np.float32))
         points = torch.clamp(points, 0, 256)
         points = (points / 256) * 2 - 1
 

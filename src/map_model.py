@@ -62,8 +62,8 @@ def visualize(batch, out, between, out_cmd, loss_point, loss_cmd, target_heatmap
         _draw.text((5, 30), 'Command: %.3f' % _loss_cmd)
         _draw.text((5, 50), 'Meta: %s' % meta)
 
-        _draw.text((5, 90), 'Raw: %.3f %.3f %.3f %.3f' % tuple(actions))
-        _draw.text((5, 110), 'Pred: %.3f %.3f %.3f %.3f %.3f' % tuple(_out_cmd))
+        _draw.text((5, 90), 'Raw: %.3f %.3f' % tuple(actions))
+        _draw.text((5, 110), 'Pred: %.3f %.3f' % tuple(_out_cmd))
 
         image = np.array(_topdown).transpose(2, 0, 1)
         images.append((_loss_cmd, torch.ByteTensor(image)))
@@ -95,12 +95,12 @@ class MapModel(pl.LightningModule):
 
         return out, (target_heatmap,)
 
-    def training_step(self, batch, batch_nb): # img never used in map model
+    def training_step(self, batch, batch_nb):
         img, topdown, points, target, actions, meta = batch
         out, (target_heatmap,) = self.forward(topdown, target, debug=True)
 
         alpha = torch.rand(out.shape).type_as(out)
-        between = alpha * out + (1-alpha) * points # Interpolate between predicted waypoints and ground truth waypoints
+        between = alpha * out + (1-alpha) * points
         out_cmd = self.controller(between)
 
         loss_point = torch.nn.functional.l1_loss(out, points, reduction='none').mean((1, 2))

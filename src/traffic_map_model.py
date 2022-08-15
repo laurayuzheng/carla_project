@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw
 from .models import SegmentationModel, RawController
 from .utils.heatmap import ToHeatmap
 from .dataset import get_dataset
+from .converter import Converter
 from . import common
 
 import gym
@@ -94,6 +95,7 @@ class TrafficMapModel(pl.LightningModule):
         self.to_heatmap = ToHeatmap(hparams.heatmap_radius)
         self.net = SegmentationModel(10, 4, hack=hparams.hack, temperature=hparams.temperature)
         self.controller = RawController(4)
+        self.converter = Converter()
         # constructor, env_name = env_constructor(params=flow_params, version=0)
         # eval_flow_params = flow_params.copy()
         # constructor2, env_name2 = env_constructor(params=eval_flow_params, version=1)
@@ -114,7 +116,7 @@ class TrafficMapModel(pl.LightningModule):
         if self.hparams.reward_type == "avg_velocity":
             return d_average_velocity(state, fail=False)
         else: 
-            return d_desired_velocity(state, 50, fail=False)
+            return d_desired_velocity(state, 30, fail=False)
 
     def simstep(self, last_obs, action, player_index, num_veh):
         d_start_state = last_obs
@@ -151,11 +153,21 @@ class TrafficMapModel(pl.LightningModule):
         alpha = torch.rand(out.shape).type_as(out)
         between = alpha * out + (1-alpha) * points # Interpolate between predicted waypoints and ground truth waypoints
         out_cmd = self.controller(between) # Outputs 3 things: 'steer', 'target_speed', 'accel', 
+        
+        points_cam = out.clone()
+        points_cam[..., 0] = (points_cam[..., 0] + 1) / 2 * img.shape[-1]
+        points_cam[..., 1] = (points_cam[..., 1] + 1) / 2 * img.shape[-2]
+        points_cam = points_cam.squeeze()
+        points_world = self.converter.cam_to_world(points_cam)
+        desired_speed = torch.norm(points_world[0] - points_world[1]) #  * (acceleration*0.05 + speed)
+        # brake = 100 if desired_speed < 0.4 else -1 # or (speed / desired_speed) > 1.1
+        desired_speed = torch.clamp(desired_speed, min=torch.finfo(torch.float32).eps, max=30)
+        brake = torch.log(2*desired_speed)
 
         # print("******************************")
         # print(out_cmd.size())
         accel = out_cmd[:,1] # matters with reward maximization
-        target_speeds = 0.1*accel + current_speed
+        # target_speeds = 0.1*accel + current_speed
         # print(accel.size())
 
         # out_cmd = torch.cat([out_cmd[:,0:2], out_cmd[:,3:]], dim=1) # remove for command loss: don't want controller and sim to "fight"
@@ -163,13 +175,13 @@ class TrafficMapModel(pl.LightningModule):
         states, reward = self.simstep(traffic_state, accel, player_ind, num_veh)
         # print(reward)
         obs_velocities = states[:,1::2].mean(1)
-        reward = -1*reward # flip reward for loss (higher reward is better)
+        reward = brake*reward # flip reward if not braking, else penalize for higher acceleration when braking
 
         loss_point = torch.nn.functional.l1_loss(out, points, reduction='none').mean((1, 2))
         loss_cmd_raw = torch.nn.functional.l1_loss(compute_out_cmd, steer_actions, reduction='none')
 
         loss_cmd = loss_cmd_raw.mean(1)
-        loss = ((loss_point + self.hparams.command_coefficient * loss_cmd) + self.hparams.reward_coefficient * reward).mean()
+        loss = ((loss_point + self.hparams.command_coefficient * loss_cmd) - self.hparams.reward_coefficient * reward).mean()
 
         metrics = {
                 'loss': loss.item(),
@@ -181,7 +193,7 @@ class TrafficMapModel(pl.LightningModule):
                 # 'loss_accel': loss_cmd_raw[:, 2].mean().item(), 
                 # 'loss_throttle': loss_cmd_raw[:, 2].mean().item(), 
                 # 'loss_brake': loss_cmd_raw[:, 3].mean().item(), 
-                'reward; '+self.hparams.reward_type: (reward*-1).mean().item()
+                'reward; '+self.hparams.reward_type: (reward).mean().item()
                 }
 
         if batch_nb % 250 == 0:
@@ -205,6 +217,16 @@ class TrafficMapModel(pl.LightningModule):
         out_cmd = self.controller(between)
         out_cmd_pred = self.controller(out)
 
+        points_cam = out.clone()
+        points_cam[..., 0] = (points_cam[..., 0] + 1) / 2 * img.shape[-1]
+        points_cam[..., 1] = (points_cam[..., 1] + 1) / 2 * img.shape[-2]
+        points_cam = points_cam.squeeze()
+        points_world = self.converter.cam_to_world(points_cam)
+        desired_speed = torch.norm(points_world[0] - points_world[1]) #  * (acceleration*0.05 + speed)
+        # brake = 100 if desired_speed < 0.4 else -1 # or (speed / desired_speed) > 1.1
+        desired_speed = torch.clamp(desired_speed, min=torch.finfo(torch.float32).eps)
+        brake = torch.log(2*desired_speed)
+
         accel = out_cmd_pred[:, 1] # matters with reward maximization
         target_speeds = 0.1*accel + current_speed
 
@@ -212,7 +234,7 @@ class TrafficMapModel(pl.LightningModule):
         compute_out_cmd = out_cmd[:,0:1]
         states, reward = self.simstep(traffic_state, accel, player_ind, num_veh)
         obs_velocities = states[:,1::2].mean(1)
-        reward = -1*reward # flip reward for loss (higher reward is better)
+        reward = brake*reward # flip reward for loss (higher reward is better)
 
 
         loss_point = torch.nn.functional.l1_loss(out, points, reduction='none').mean((1, 2))
@@ -220,7 +242,7 @@ class TrafficMapModel(pl.LightningModule):
         loss_cmd_pred_raw = torch.nn.functional.l1_loss(compute_out_cmd_pred, steer_actions, reduction='none')
 
         loss_cmd = loss_cmd_raw.mean(1)
-        loss = ((loss_point + self.hparams.command_coefficient * loss_cmd) + self.hparams.reward_coefficient * reward).mean()
+        loss = ((loss_point + self.hparams.command_coefficient * loss_cmd) - self.hparams.reward_coefficient * reward).mean()
 
         if batch_nb == 0:
             self.logger.log_metrics({
@@ -308,9 +330,9 @@ if __name__ == '__main__':
 
     parser.add_argument('--heatmap_radius', type=int, default=5)
     parser.add_argument('--sample_by', type=str, choices=['none', 'even', 'speed', 'steer'], default='even')
-    parser.add_argument('--reward_type', type=str, default="avg_velocity", choices=["avg_velocity", "desired_velocity"])
+    parser.add_argument('--reward_type', type=str, default="desired_velocity", choices=["avg_velocity", "desired_velocity"])
     parser.add_argument('--command_coefficient', type=float, default=0.1)
-    parser.add_argument('--reward_coefficient', type=float, default=0.5)
+    parser.add_argument('--reward_coefficient', type=float, default=0.1)
     parser.add_argument('--temperature', type=float, default=10.0)
     parser.add_argument('--hack', action='store_true', default=False)
 

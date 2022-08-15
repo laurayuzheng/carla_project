@@ -16,6 +16,7 @@ Script to integrate CARLA and SUMO simulations
 import argparse
 import logging
 import time
+import math 
 
 # ==================================================================================================
 # -- find carla module -----------------------------------------------------------------------------
@@ -81,8 +82,9 @@ class SimulationSynchronization(object):
             self.carla.switch_off_traffic_lights()
 
         # Mapped actor ids.
-        self.sumo2carla_ids = {}  # Contains only actors controlled by sumo.
-        self.carla2sumo_ids = {}  # Contains only actors controlled by carla.
+        self.sumo2carla_ids = {}  # Contains only actors controlled by sumo. Indexed by SUMO ids. 
+        self.carla2sumo_ids = {}  # Contains only actors controlled by carla. Indexed by CARLA ids.
+        self.carla_sumo2carla_ids = {} # Contains actors controlled by carla, but indexed by SUMO ids
         self.ego_sumo_id = None # We need sumo id of ego vehicle to get state
 
         BridgeHelper.blueprint_library = self.carla.world.get_blueprint_library()
@@ -93,6 +95,17 @@ class SimulationSynchronization(object):
         settings.synchronous_mode = True 
         settings.fixed_delta_seconds = self.carla.step_length
         self.carla.world.apply_settings(settings)
+
+    def get_state(self):
+        sumo_state, player_ind = self.sumo.get_state() 
+        state = sumo_state.copy()
+        for i in range(len(state) // 2):
+            sumo_id = state[i*2+1]
+            carla_velocity = self.carla.get_actor(self.carla_sumo2carla_ids[sumo_id]).get_velocity()
+            carla_velocity = math.sqrt(carla_velocity.x**2 + carla_velocity.y**2 + carla_velocity.z**2)
+            state[i*2+1] = carla_velocity
+
+        return state, player_ind
 
     def tick(self):
         """
@@ -170,6 +183,7 @@ class SimulationSynchronization(object):
                 sumo_actor_id = self.sumo.spawn_actor(type_id, color)
                 if sumo_actor_id != INVALID_ACTOR_ID:
                     self.carla2sumo_ids[carla_actor_id] = sumo_actor_id
+                    self.carla_sumo2carla_ids[sumo_actor_id] = carla_actor_id
                     self.sumo.subscribe(sumo_actor_id)
                 
                 # if not self.ego_sumo_id and role == 'hero':
@@ -178,7 +192,9 @@ class SimulationSynchronization(object):
         # Destroying required carla actors in sumo.
         for carla_actor_id in self.carla.destroyed_actors:
             if carla_actor_id in self.carla2sumo_ids:
-                self.sumo.destroy_actor(self.carla2sumo_ids.pop(carla_actor_id))
+                sumo_id = self.carla2sumo_ids.pop(carla_actor_id)
+                self.sumo.destroy_actor(sumo_id)
+                self.carla_sumo2carla_ids.pop(sumo_id)
 
         # Updating carla actors in sumo.
         for carla_actor_id in self.carla2sumo_ids:
@@ -245,6 +261,7 @@ class SimulationSynchronization(object):
 
         self.sumo2carla_ids = {} 
         self.carla2sumo_ids = {}
+        self.carla_sumo2carla_ids = {}
 
         self.ego_sumo_id = None 
         
