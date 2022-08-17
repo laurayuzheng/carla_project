@@ -247,7 +247,7 @@ class TrafficCarlaDataset(Dataset):
             assert (dataset_dir / 'rgb_left' / ('%s.png' % frame)).exists()
             assert (dataset_dir / 'rgb_right' / ('%s.png' % frame)).exists()
             assert (dataset_dir / 'topdown' / ('%s.png' % frame)).exists()
-            assert int(frame) < len(self.measurements)
+            assert int(frame) < len(self.measurements)+5, 'frame %d is >= than length of measurements %d in dataset %s' % (int(frame), len(self.measurements), dataset_dir)
 
             self.frames.append(frame)
 
@@ -313,7 +313,7 @@ class TrafficCarlaDataset(Dataset):
         num_veh = len(traffic_state) // 2 
         # print(num_veh)
         # print(traffic_state)
-        traffic_state = np.pad(traffic_state, (0,50-traffic_state.shape[0]), 'constant')
+        traffic_state = np.pad(traffic_state, (0,100-traffic_state.shape[0]), 'constant')
         # print(traffic_state.shape)
         traffic_state = torch.FloatTensor(traffic_state)
         ind_of_player = int(self.measurements.iloc[i][['player_ind_in_lane']])

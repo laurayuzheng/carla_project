@@ -27,6 +27,22 @@ class RawController(torch.nn.Module):
                 torch.nn.Linear(k, k), torch.nn.ReLU(),
 
                 torch.nn.BatchNorm1d(k),
+                torch.nn.Linear(k, 1),
+                )
+
+    def forward(self, x):
+        return self.layers(torch.flatten(x, 1))
+
+class RawImageModelController(torch.nn.Module):
+    def __init__(self, n_input=4, k=32):
+        self.layers = torch.nn.Sequential(
+                torch.nn.BatchNorm1d(n_input * 2),
+                torch.nn.Linear(n_input * 2, k), torch.nn.ReLU(),
+
+                torch.nn.BatchNorm1d(k),
+                torch.nn.Linear(k, k), torch.nn.ReLU(),
+
+                torch.nn.BatchNorm1d(k),
                 torch.nn.Linear(k, 2),
                 )
 

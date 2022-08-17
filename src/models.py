@@ -5,7 +5,7 @@ from torchvision.models.segmentation import deeplabv3_resnet50
 
 
 class RawController(torch.nn.Module):
-    def __init__(self, n_input=4, k=32):
+    def __init__(self, n_input=4, k=32, n_classes=1):
         super().__init__()
 
         self.layers = torch.nn.Sequential(
@@ -16,7 +16,7 @@ class RawController(torch.nn.Module):
                 torch.nn.Linear(k, k), torch.nn.ReLU(),
 
                 torch.nn.BatchNorm1d(k),
-                torch.nn.Linear(k, 2))
+                torch.nn.Linear(k, n_classes))
 
     def forward(self, x):
         return self.layers(torch.flatten(x, 1))

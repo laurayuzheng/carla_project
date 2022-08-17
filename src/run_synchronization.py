@@ -201,7 +201,18 @@ class SimulationSynchronization(object):
             sumo_actor_id = self.carla2sumo_ids[carla_actor_id]
 
             carla_actor = self.carla.get_actor(carla_actor_id)
-            sumo_actor = self.sumo.get_actor(sumo_actor_id)
+            try:
+                sumo_actor = self.sumo.get_actor(sumo_actor_id)
+            except Exception: # if failed try again
+                type_id = BridgeHelper.get_sumo_vtype(carla_actor)
+                color = carla_actor.attributes.get('color', None) if self.sync_vehicle_color else None
+                if type_id is not None:
+                    sumo_actor_id = self.sumo.spawn_actor(type_id, color)
+                    if sumo_actor_id != INVALID_ACTOR_ID:
+                        self.carla2sumo_ids[carla_actor_id] = sumo_actor_id
+                        self.carla_sumo2carla_ids[sumo_actor_id] = carla_actor_id
+                        self.sumo.subscribe(sumo_actor_id)
+                sumo_actor = self.sumo.get_actor(sumo_actor_id)
 
             sumo_transform = BridgeHelper.get_sumo_transform(carla_actor.get_transform(),
                                                              carla_actor.bounding_box.extent)
