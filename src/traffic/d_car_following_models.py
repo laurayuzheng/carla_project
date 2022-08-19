@@ -19,6 +19,7 @@ def simulate_idm_timestep(q_0: torch.Tensor, rl_actions: torch.Tensor, rl_indice
     q = torch.zeros_like(q_0).type_as(q_0)
     rl_actions_i = 0
     q_clone = q_0.clone()
+    max_accels = torch.zeros_like(rl_actions).type_as(q_0)
     
     vs = q_clone[1::2]
     xs = q_clone[0::2]
@@ -33,7 +34,13 @@ def simulate_idm_timestep(q_0: torch.Tensor, rl_actions: torch.Tensor, rl_indice
     dv = a * (1 - (vs / v0)**delta - interaction_terms) # calculate acceleration
     
     for i in rl_indices: # use RL vehicle's acceleration action
-        dv[i] = rl_actions[rl_actions_i]
+        if i == 0:
+            max_accel = 20 
+        else: 
+            max_accel = (xs[i-1] - xs[i] + 2*t_delta*vs[i-1] - 2*t_delta*vs[i] + t_delta**2*dv[i-1] + s0) / (t_delta**2)
+            max_accels[rl_actions_i] = max_accel 
+
+        dv[i] = torch.sigmoid(rl_actions[rl_actions_i]) * max_accel
         rl_actions_i += 1
 
     q[0::2] = xs + vs*t_delta

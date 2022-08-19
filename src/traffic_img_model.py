@@ -16,14 +16,14 @@ from PIL import Image, ImageDraw
 from .traffic_map_model_accel import TrafficMapModelAccel
 from .models import SegmentationModel, RawController
 from .utils.heatmap import ToHeatmap
-from .dataset import get_dataset
+from .dataset import get_dataset, get_dagger_dataset
 from .converter import Converter
 from . import common
 from .scripts.cluster_points import points as RANDOM_POINTS
 
 
 @torch.no_grad()
-def viz(batch, out, out_ctrl, target_cam, lbl_cam, lbl_map, ctrl_map, point_loss, ctrl_loss):
+def viz(batch, out, out_ctrl, target_cam, lbl_cam, lbl_map, ctrl_map, point_loss, ctrl_loss, speeds):
     images = list()
 
     for i in range(out.shape[0]):
@@ -37,6 +37,8 @@ def viz(batch, out, out_ctrl, target_cam, lbl_cam, lbl_map, ctrl_map, point_loss
 
         _out_ctrl = out_ctrl[i]
         _ctrl_map = ctrl_map[i]
+        _speed = speeds[i]
+        _our_speed = speeds[i] + 0.1*_out_ctrl
 
         img, topdown, points, _, actions, meta = [x[i] for x in batch]
 
@@ -44,9 +46,11 @@ def viz(batch, out, out_ctrl, target_cam, lbl_cam, lbl_map, ctrl_map, point_loss
         _draw_rgb = ImageDraw.Draw(_rgb)
         _draw_rgb.text((5, 10), 'Point loss: %.3f' % _point_loss)
         _draw_rgb.text((5, 30), 'Control loss: %.3f' % _ctrl_loss)
-        _draw_rgb.text((5, 50), 'Raw: %.3f %.3f' % tuple(_out_ctrl))
-        _draw_rgb.text((5, 70), 'Pred: %.3f %.3f' % tuple(_ctrl_map))
+        _draw_rgb.text((5, 50), 'Pred: %.3f ' % tuple(_out_ctrl))
+        _draw_rgb.text((5, 70), 'Label: %.3f ' % tuple(_ctrl_map))
         _draw_rgb.text((5, 90), 'Meta: %s' % meta)
+        _draw_rgb.text((5, 110), 'Expert speed: %.3f ' % _speed)
+        _draw_rgb.text((5, 130), 'Our speed: %.3f ' % _our_speed)
         _draw_rgb.ellipse((_target[0]-3, _target[1]-3, _target[0]+3, _target[1]+3), (255, 255, 255))
 
         for x, y in _out:
@@ -90,11 +94,12 @@ def viz(batch, out, out_ctrl, target_cam, lbl_cam, lbl_map, ctrl_map, point_loss
 
 
 class TrafficImageModel(pl.LightningModule):
-    def __init__(self, hparams, teacher_path=''):
+    def __init__(self, hparams, teacher_path='', dagger=False):
         super().__init__()
 
         self.hparams = hparams
         self.to_heatmap = ToHeatmap(hparams.heatmap_radius)
+        self.dagger = dagger
 
         if teacher_path:
             self.teacher = TrafficMapModelAccel.load_from_checkpoint(teacher_path)
@@ -102,7 +107,7 @@ class TrafficImageModel(pl.LightningModule):
 
         self.net = SegmentationModel(10, 4, hack=hparams.hack, temperature=hparams.temperature)
         self.converter = Converter()
-        self.controller = RawController(4, n_classes=2)
+        self.controller = RawController(4, n_classes=1)
 
     def forward(self, img, target):
         target_cam = self.converter.map_to_cam(target)
@@ -115,137 +120,39 @@ class TrafficImageModel(pl.LightningModule):
     def _get_labels(self, topdown, target):
         out, (target_heatmap,) = self.teacher.forward(topdown, target, debug=True)
         control_accel = self.teacher.controller(out)
-        control_steer = self.teacher.steer_net.controller(out)
 
-        return out, control_steer, control_accel, (target_heatmap,)
+        return out, control_accel, (target_heatmap,)
 
     def training_step(self, batch, batch_nb):
         img, topdown, points, target, actions, meta = batch
         
+        speeds = actions[:,1]
 
         # Ground truth command.
-        lbl_map, steer_actions, teacher_accel, (target_heatmap,) = self._get_labels(topdown, target)
+        lbl_map, ctrl_map, (target_heatmap,) = self._get_labels(topdown, target)
+        lbl_map = points # Use ground truth points here
         lbl_cam = self.converter.map_to_cam((lbl_map + 1) / 2 * 256)
         lbl_cam[..., 0] = (lbl_cam[..., 0] / 256) * 2 - 1
         lbl_cam[..., 1] = (lbl_cam[..., 1] / 144) * 2 - 1
-        ctrl_map = torch.cat([steer_actions, teacher_accel], dim=1).type_as(img)
+        # ctrl_map = torch.cat([steer_actions, teacher_accel], dim=1).type_as(img)
         # steer_actions = ctrl_map[:,0:1]
         # teacher_accel = ctrl_map[:,1]
 
         out, (target_cam, target_heatmap_cam) = self.forward(img, target)
-        points_cam = out.clone()
-        points_cam[..., 0] = (points_cam[..., 0] + 1) / 2 * img.shape[-1]
-        points_cam[..., 1] = (points_cam[..., 1] + 1) / 2 * img.shape[-2]
-        points_cam = points_cam.squeeze()
-        points_world = self.converter.cam_to_world(points_cam)
-        desired_speed = torch.norm(points_world[0] - points_world[1]) #  * (acceleration*0.05 + speed)
-        # brake = 100 if desired_speed < 0.4 else -1 # or (speed / desired_speed) > 1.1
-        desired_speed = torch.clamp(desired_speed, min=torch.finfo(torch.float32).eps, max=35)
-        brake = -torch.log(2*desired_speed)
 
         alpha = torch.rand(out.shape[0], out.shape[1], 1).type_as(out)
         between = alpha * out + (1-alpha) * lbl_cam
         out_ctrl = self.controller(between)
 
-        steer_ctrl = out_ctrl[:,0:1]
-        pred_accel = out_ctrl[:,1:2]
-
-        point_loss = torch.nn.functional.l1_loss(out, lbl_cam, reduction='none').mean((1, 2))
-        ctrl_loss_raw = torch.nn.functional.l1_loss(steer_ctrl, steer_actions, reduction='none')
-        ctrl_loss_raw_accel = torch.nn.functional.l1_loss(pred_accel, teacher_accel, reduction='none')
-        ctrl_loss = ctrl_loss_raw.mean(1)
-        steer_loss = ctrl_loss_raw[:, 0]
-        accel_loss = ctrl_loss_raw_accel
-
-        loss_gt = (point_loss + self.hparams.command_coefficient * ctrl_loss + self.hparams.reward_coefficient * brake * accel_loss)
-        loss_gt_mean = loss_gt.mean()
-
-        # Random command.
-        indices = np.random.choice(RANDOM_POINTS.shape[0], topdown.shape[0])
-        target_aug = torch.from_numpy(RANDOM_POINTS[indices]).type_as(img)
-
-        lbl_map_aug, steer_actions_aug, teacher_accel_aug, (target_heatmap_aug,) = self._get_labels(topdown, target_aug)
-        ctrl_map_aug = torch.cat([steer_actions_aug, teacher_accel_aug], dim=1).type_as(img)
-        lbl_cam_aug = self.converter.map_to_cam((lbl_map_aug + 1) / 2 * 256)
-        lbl_cam_aug[..., 0] = (lbl_cam_aug[..., 0] / 256) * 2 - 1
-        lbl_cam_aug[..., 1] = (lbl_cam_aug[..., 1] / 144) * 2 - 1
-
-        out_aug, (target_cam_aug, target_heatmap_cam_aug) = self.forward(img, target_aug)
-        points_cam = out_aug.clone()
-        points_cam[..., 0] = (points_cam[..., 0] + 1) / 2 * img.shape[-1]
-        points_cam[..., 1] = (points_cam[..., 1] + 1) / 2 * img.shape[-2]
-        points_cam = points_cam.squeeze()
-        points_world = self.converter.cam_to_world(points_cam)
-        desired_speed = torch.norm(points_world[0] - points_world[1]) #  * (acceleration*0.05 + speed)
-
-        desired_speed = torch.clamp(desired_speed, min=torch.finfo(torch.float32).eps, max=35)
-        brake_aug = -torch.log(2*desired_speed)
-
-        alpha = torch.rand(out.shape[0], out.shape[1], 1).type_as(out)
-        between_aug = alpha * out_aug + (1-alpha) * lbl_cam_aug
-        out_ctrl_aug = self.controller(between_aug)
-
-        steer_ctrl_aug = out_ctrl_aug[:,0:1]
-        pred_accel_aug = out_ctrl_aug[:,1:2]
-
-        point_loss_aug = torch.nn.functional.l1_loss(out_aug, lbl_cam_aug, reduction='none').mean((1, 2))
-        ctrl_loss_aug_raw = torch.nn.functional.l1_loss(steer_ctrl_aug, steer_actions_aug, reduction='none')
-        accel_loss_aug = torch.nn.functional.l1_loss(pred_accel_aug, teacher_accel_aug, reduction='none')
-        ctrl_loss_aug = ctrl_loss_aug_raw.mean(1)
-        steer_loss_aug = ctrl_loss_aug_raw[:, 0]
-
-        loss_aug = (point_loss_aug + self.hparams.command_coefficient * ctrl_loss_aug + self.hparams.reward_coefficient * brake_aug * accel_loss_aug)
-        loss_aug_mean = loss_aug.mean()
-
-        loss = loss_gt_mean + loss_aug_mean
-        metrics = {
-                'train_loss': loss.item(),
-
-                'train_point': point_loss.mean().item(),
-                # 'train_ctrl': ctrl_loss.mean().item(),
-                'train_steer': steer_loss.mean().item(),
-                'train_accel': accel_loss.mean().item(),
-
-                'train_point_aug': point_loss_aug.mean().item(),
-                # 'train_ctrl_aug': ctrl_loss_aug.mean().item(),
-                'train_steer_aug': steer_loss_aug.mean().item(),
-                'train_accel_aug': accel_loss_aug.mean().item(),
-                }
-
-        if batch_nb % 250 == 0:
-            metrics['train_image'] = viz(batch, out, out_ctrl, target_cam, lbl_cam, lbl_map, ctrl_map, point_loss, ctrl_loss)
-            metrics['train_image_aug'] = viz(batch, out_aug, out_ctrl_aug, target_cam_aug,
-                                             lbl_cam_aug, lbl_map_aug, ctrl_map_aug,
-                                             point_loss_aug, ctrl_loss_aug)
-
-        self.logger.log_metrics(metrics, self.global_step)
-
-        return {'loss': loss}
-
-    def validation_step(self, batch, batch_nb):
-        img, topdown, points, target, actions, meta = batch
-
-        # Ground truth command.
-        lbl_map, ctrl_steer, ctrl_accel, (target_heatmap,) = self._get_labels(topdown, target)
-        lbl_cam = self.converter.map_to_cam((lbl_map + 1) / 2 * 256)
-        lbl_cam[..., 0] = (lbl_cam[..., 0] / 256) * 2 - 1
-        lbl_cam[..., 1] = (lbl_cam[..., 1] / 144) * 2 - 1
-
-        out, (target_cam, target_heatmap_cam) = self.forward(img, target)
-        ctrl_map = torch.cat([ctrl_steer, ctrl_accel], dim=1).type_as(points)
-        out_ctrl = self.controller(out)
-        out_ctrl_gt = self.controller(lbl_cam)
+        # steer_ctrl = out_ctrl[:,0:1]
+        # pred_accel = out_ctrl[:,1:2]
 
         point_loss = torch.nn.functional.l1_loss(out, lbl_cam, reduction='none').mean((1, 2))
         ctrl_loss_raw = torch.nn.functional.l1_loss(out_ctrl, ctrl_map, reduction='none')
+        # ctrl_loss_raw_accel = torch.nn.functional.l1_loss(pred_accel, teacher_accel, reduction='none')
         ctrl_loss = ctrl_loss_raw.mean(1)
-        steer_loss = ctrl_loss_raw[:, 0]
-        accel_loss = ctrl_loss_raw[:, 1]
-
-        ctrl_loss_gt_raw = torch.nn.functional.l1_loss(out_ctrl_gt, ctrl_map, reduction='none')
-        ctrl_loss_gt = ctrl_loss_gt_raw.mean(1)
-        steer_loss_gt = ctrl_loss_gt_raw[:, 0]
-        accel_loss_gt = ctrl_loss_gt_raw[:, 1]
+        accel_loss = ctrl_loss_raw[:, 0]
+        # accel_loss = ctrl_loss_raw[:, 1]
 
         loss_gt = (point_loss + self.hparams.command_coefficient * ctrl_loss)
         loss_gt_mean = loss_gt.mean()
@@ -254,12 +161,93 @@ class TrafficImageModel(pl.LightningModule):
         indices = np.random.choice(RANDOM_POINTS.shape[0], topdown.shape[0])
         target_aug = torch.from_numpy(RANDOM_POINTS[indices]).type_as(img)
 
-        lbl_map_aug, ctrl_steer_aug, ctrl_accel_aug, (target_heatmap_aug,) = self._get_labels(topdown, target_aug)
+        lbl_map_aug, ctrl_map_aug, (target_heatmap_aug,) = self._get_labels(topdown, target_aug)
+        # ctrl_map_aug = torch.cat([steer_actions_aug, teacher_accel_aug], dim=1).type_as(img)
+        lbl_cam_aug = self.converter.map_to_cam((lbl_map_aug + 1) / 2 * 256)
+        lbl_cam_aug[..., 0] = (lbl_cam_aug[..., 0] / 256) * 2 - 1
+        lbl_cam_aug[..., 1] = (lbl_cam_aug[..., 1] / 144) * 2 - 1
+
+        out_aug, (target_cam_aug, target_heatmap_cam_aug) = self.forward(img, target_aug)
+
+        alpha = torch.rand(out.shape[0], out.shape[1], 1).type_as(out)
+        between_aug = alpha * out_aug + (1-alpha) * lbl_cam_aug
+        out_ctrl_aug = self.controller(between_aug)
+
+        # steer_ctrl_aug = out_ctrl_aug[:,0:1]
+        # pred_accel_aug = out_ctrl_aug[:,1:2]
+
+        point_loss_aug = torch.nn.functional.l1_loss(out_aug, lbl_cam_aug, reduction='none').mean((1, 2))
+        ctrl_loss_aug_raw = torch.nn.functional.l1_loss(out_ctrl_aug, ctrl_map_aug, reduction='none')
+        # accel_loss_aug = torch.nn.functional.l1_loss(pred_accel_aug, teacher_accel_aug, reduction='none')
+        ctrl_loss_aug = ctrl_loss_aug_raw.mean(1)
+        accel_loss_aug = ctrl_loss_aug_raw[:, 0]
+        # accel_loss_aug = ctrl_loss_aug_raw[:, 1]
+
+        loss_aug = (point_loss_aug + self.hparams.command_coefficient * ctrl_loss_aug)
+        loss_aug_mean = loss_aug.mean()
+
+        loss = loss_gt_mean + loss_aug_mean
+        metrics = {
+                'train_loss': loss.item(),
+
+                'train_point': point_loss.mean().item(),
+                # 'train_steer': steer_loss.mean().item(),
+                'train_accel': accel_loss.mean().item(),
+
+                'train_point_aug': point_loss_aug.mean().item(),
+                # 'train_steer_aug': steer_loss_aug.mean().item(),
+                'train_accel_aug': accel_loss_aug.mean().item(),
+                }
+
+        if batch_nb % 250 == 0:
+            metrics['train_image'] = viz(batch, out, out_ctrl, target_cam, lbl_cam, lbl_map, ctrl_map, point_loss, ctrl_loss, speeds)
+            metrics['train_image_aug'] = viz(batch, out_aug, out_ctrl_aug, target_cam_aug,
+                                             lbl_cam_aug, lbl_map_aug, ctrl_map_aug,
+                                             point_loss_aug, ctrl_loss_aug, speeds)
+
+        self.logger.log_metrics(metrics, self.global_step)
+
+        return {'loss': loss}
+
+    def validation_step(self, batch, batch_nb):
+        img, topdown, points, target, actions, meta = batch
+        speeds = actions[:,1]
+
+        # Ground truth command.
+        lbl_map, ctrl_map, (target_heatmap,) = self._get_labels(topdown, target)
+        lbl_cam = self.converter.map_to_cam((lbl_map + 1) / 2 * 256)
+        lbl_cam[..., 0] = (lbl_cam[..., 0] / 256) * 2 - 1
+        lbl_cam[..., 1] = (lbl_cam[..., 1] / 144) * 2 - 1
+
+        out, (target_cam, target_heatmap_cam) = self.forward(img, target)
+        # ctrl_map = torch.cat([ctrl_steer, ctrl_accel], dim=1).type_as(points)
+        out_ctrl = self.controller(out)
+        out_ctrl_gt = self.controller(lbl_cam)
+
+        point_loss = torch.nn.functional.l1_loss(out, lbl_cam, reduction='none').mean((1, 2))
+        ctrl_loss_raw = torch.nn.functional.l1_loss(out_ctrl, ctrl_map, reduction='none')
+        ctrl_loss = ctrl_loss_raw.mean(1)
+        accel_loss = ctrl_loss_raw[:, 0]
+        # accel_loss = ctrl_loss_raw[:, 1]
+
+        ctrl_loss_gt_raw = torch.nn.functional.l1_loss(out_ctrl_gt, ctrl_map, reduction='none')
+        ctrl_loss_gt = ctrl_loss_gt_raw.mean(1)
+        accel_loss_gt = ctrl_loss_gt_raw[:, 0]
+        # accel_loss_gt = ctrl_loss_gt_raw[:, 1]
+
+        loss_gt = (point_loss + self.hparams.command_coefficient * ctrl_loss)
+        loss_gt_mean = loss_gt.mean()
+
+        # Random command.
+        indices = np.random.choice(RANDOM_POINTS.shape[0], topdown.shape[0])
+        target_aug = torch.from_numpy(RANDOM_POINTS[indices]).type_as(img)
+
+        lbl_map_aug, ctrl_map_aug, (target_heatmap_aug,) = self._get_labels(topdown, target_aug)
         lbl_cam_aug = self.converter.map_to_cam((lbl_map_aug + 1) / 2 * 256)
         lbl_cam_aug[..., 0] = (lbl_cam_aug[..., 0] / 256) * 2 - 1
         lbl_cam_aug[..., 1] = (lbl_cam_aug[..., 1] / 144) * 2 - 1
         out_aug, (target_cam_aug, target_heatmap_cam_aug) = self.forward(img, target_aug)
-        ctrl_map_aug = torch.cat([ctrl_steer_aug,ctrl_accel_aug], dim=1).type_as(lbl_map_aug)
+        # ctrl_map_aug = torch.cat([ctrl_steer_aug,ctrl_accel_aug], dim=1).type_as(lbl_map_aug)
         out_ctrl_aug = self.controller(out_aug)
         out_ctrl_gt_aug = self.controller(lbl_cam_aug)
 
@@ -267,23 +255,23 @@ class TrafficImageModel(pl.LightningModule):
 
         ctrl_loss_aug_raw = torch.nn.functional.l1_loss(out_ctrl_aug, ctrl_map_aug, reduction='none')
         ctrl_loss_aug = ctrl_loss_aug_raw.mean(1)
-        steer_loss_aug = ctrl_loss_aug_raw[:, 0]
-        accel_loss_aug = ctrl_loss_aug_raw[:, 1]
+        accel_loss_aug = ctrl_loss_aug_raw[:, 0]
+        # accel_loss_aug = ctrl_loss_aug_raw[:, 1]
 
         ctrl_loss_gt_aug_raw = torch.nn.functional.l1_loss(out_ctrl_gt_aug, ctrl_map_aug, reduction='none')
         ctrl_loss_gt_aug = ctrl_loss_gt_aug_raw.mean(1)
-        steer_loss_gt_aug = ctrl_loss_gt_aug_raw[:, 0]
-        accel_loss_gt_aug = ctrl_loss_gt_aug_raw[:, 1]
+        accel_loss_gt_aug = ctrl_loss_gt_aug_raw[:, 0]
+        # accel_loss_gt_aug = ctrl_loss_gt_aug_raw[:, 1]
 
         loss_gt_aug = (point_loss_aug + self.hparams.command_coefficient * ctrl_loss_aug)
         loss_gt_aug_mean = loss_gt_aug.mean()
 
         if batch_nb == 0:
             self.logger.log_metrics({
-                'val_image': viz(batch, out, out_ctrl, target_cam, lbl_cam, lbl_map, ctrl_map, point_loss, ctrl_loss),
+                'val_image': viz(batch, out, out_ctrl, target_cam, lbl_cam, lbl_map, ctrl_map, point_loss, ctrl_loss, speeds),
                 'val_image_aug': viz(batch, out_aug, out_ctrl_aug, target_cam_aug,
                                      lbl_cam_aug, lbl_map_aug, ctrl_map_aug,
-                                     point_loss_aug, ctrl_loss_aug)
+                                     point_loss_aug, ctrl_loss_aug, speeds)
                 }, self.global_step)
 
         return {
@@ -291,18 +279,18 @@ class TrafficImageModel(pl.LightningModule):
 
                 'val_point': point_loss.mean().item(),
                 'val_ctrl': ctrl_loss.mean().item(),
-                'val_steer': steer_loss.mean().item(),
+                # 'val_steer': steer_loss.mean().item(),
                 'val_accel': accel_loss.mean().item(),
                 'val_ctrl_gt': ctrl_loss_gt.mean().item(),
-                'val_steer_gt': steer_loss_gt.mean().item(),
+                # 'val_steer_gt': steer_loss_gt.mean().item(),
                 'val_accel_gt': accel_loss_gt.mean().item(),
 
                 'val_point_aug': point_loss_aug.mean().item(),
                 'val_ctrl_aug': ctrl_loss_aug.mean().item(),
-                'val_steer_aug': steer_loss_aug.mean().item(),
+                # 'val_steer_aug': steer_loss_aug.mean().item(),
                 'val_accel_aug': accel_loss_aug.mean().item(),
                 'val_ctrl_gt_aug': ctrl_loss_gt_aug.mean().item(),
-                'val_steer_gt_aug': steer_loss_gt_aug.mean().item(),
+                # 'val_steer_gt_aug': steer_loss_gt_aug.mean().item(),
                 'val_accel_gt_aug': accel_loss_gt_aug.mean().item(),
                 }
 
@@ -332,10 +320,16 @@ class TrafficImageModel(pl.LightningModule):
         return [optim], [scheduler]
 
     def train_dataloader(self):
-        return get_dataset(self.hparams.dataset_dir, True, self.hparams.batch_size, sample_by=self.hparams.sample_by)
+        if self.dagger:
+            return get_dagger_dataset(self.hparams.dataset_dir, True, self.hparams.batch_size, sample_by=self.hparams.sample_by)
+        else:
+            return get_dataset(self.hparams.dataset_dir, True, self.hparams.batch_size, sample_by=self.hparams.sample_by)
 
     def val_dataloader(self):
-        return get_dataset(self.hparams.dataset_dir, False, self.hparams.batch_size, sample_by=self.hparams.sample_by)
+        if self.dagger:
+            return get_dagger_dataset(self.hparams.dataset_dir, False, self.hparams.batch_size, sample_by=self.hparams.sample_by)
+        else:
+            return get_dataset(self.hparams.dataset_dir, False, self.hparams.batch_size, sample_by=self.hparams.sample_by)
 
     def state_dict(self):
         return {k: v for k, v in super().state_dict().items() if 'teacher' not in k}
@@ -354,7 +348,10 @@ def main(hparams):
 
     model = TrafficImageModel(hparams, teacher_path=hparams.teacher_path)
     logger = WandbLogger(id=hparams.id, save_dir=str(hparams.save_dir), project='stage_2')
-    checkpoint_callback = ModelCheckpoint(hparams.save_dir, save_top_k=1)
+    checkpoint_callback = ModelCheckpoint(hparams.save_dir, 
+                                            # monitor="train_loss",
+                                            # mode="min",
+                                            save_top_k=1)
 
     trainer = pl.Trainer(
             gpus=-1, max_epochs=hparams.max_epochs,
@@ -368,7 +365,7 @@ def main(hparams):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--max_epochs', type=int, default=50)
+    parser.add_argument('--max_epochs', type=int, default=100)
     parser.add_argument('--save_dir', type=pathlib.Path, default='checkpoints')
     parser.add_argument('--id', type=str, default=uuid.uuid4().hex)
 

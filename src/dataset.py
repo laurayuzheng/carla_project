@@ -44,6 +44,36 @@ def get_weights(data, key='speed', bins=4):
 
     return class_weights[classes]
 
+def get_dagger_dataset(dataset_dir, is_train=True, batch_size=128, num_workers=4, sample_by='none', use_cpu=False, traffic=False, **kwargs):
+    data = list()
+    transform = transforms.Compose([
+        get_augmenter() if is_train else lambda x: x,
+        transforms.ToTensor()
+        ])
+
+    episodes = [dir for dir in list(sorted(Path(dataset_dir).glob('*'))) if os.path.isdir(dir)]
+
+    for i, _dataset_dir in enumerate(episodes):
+        add = False
+        add |= (is_train and i % 10 < 9)
+        add |= (not is_train and i % 10 >= 9)
+
+        if add:
+            if traffic: 
+                data.append(TrafficCarlaDataset(_dataset_dir, transform, **kwargs))
+            else:
+                data.append(CarlaDataset(_dataset_dir, transform, **kwargs))
+
+    num_frames = sum(map(len,data))
+    num_samples = num_frames // batch_size + 1 
+    num_samples_val = num_samples // 10
+    print('%d frames.' % sum(map(len, data)))
+
+    weights = torch.DoubleTensor(get_weights(data, key=sample_by))
+    sampler = torch.utils.data.sampler.WeightedRandomSampler(weights, len(weights))
+    data = torch.utils.data.ConcatDataset(data)
+
+    return Wrap(data, sampler, batch_size, num_samples if is_train else num_samples_val, num_workers, use_cpu)
 
 def get_dataset(dataset_dir, is_train=True, batch_size=128, num_workers=4, sample_by='none', use_cpu=False, traffic=False, **kwargs):
     data = list()

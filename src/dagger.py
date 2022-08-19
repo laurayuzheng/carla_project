@@ -23,7 +23,8 @@ import gym
 import math
 
 from .traffic.d_car_following_models import IDMStepLayer
-from .traffic.rewards import *
+from .traffic.rewards import * 
+from .traffic_map_model_accel import TrafficMapModelAccel
 
 import torch
 from torch import det
@@ -90,7 +91,7 @@ def visualize(batch, out, between, out_steer, out_accel, loss_point, loss_cmd, t
 
     return result
 
-class TrafficMapModelAccel(pl.LightningModule):
+class Dagger(pl.LightningModule):
     def __init__(self, hparams):
         super().__init__()
 
