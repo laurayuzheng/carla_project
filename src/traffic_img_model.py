@@ -102,6 +102,7 @@ class TrafficImageModel(pl.LightningModule):
         self.dagger = dagger
 
         if teacher_path:
+            print("Loading teacher weights from checkpoint: ", teacher_path)
             self.teacher = TrafficMapModelAccel.load_from_checkpoint(teacher_path)
             self.teacher.freeze()
 
