@@ -165,7 +165,8 @@ class TrafficMapModelAccel(pl.LightningModule):
             obs_array.append(obs)
             reward = torch.sigmoid(self.d_compute_reward(obs).type_as(last_obs))
             # rewards.append(reward.unsqueeze(0))
-            rewards.append(-0.5 * torch.sigmoid(self.get_actions_loss(curr_state, d_action[i], [player_index[i]], 0.05, 30, 2, 1, 1, 1.5, 4)) + reward)
+            # rewards.append(-0.5 * torch.sigmoid(self.get_actions_loss(curr_state, d_action[i], [player_index[i]], 0.05, 30, 2, 1, 1, 1.5, 4)) + reward)
+            rewards.append(reward)
 
         # obs_array = torch.cat(obs_array)
         rewards = torch.cat(rewards)
@@ -176,7 +177,7 @@ class TrafficMapModelAccel(pl.LightningModule):
 
     def training_step(self, batch, batch_nb): # img never used in map model
         img, topdown, points, target, actions, meta, traffic_state, player_ind, num_veh = batch
-        # speed_actions = actions[:,1:2]
+        speed_actions = actions[:,1]
 
         out, (target_heatmap,) = self.forward(topdown, target, debug=True) # Just uses feature extractor of map model
         

@@ -37,6 +37,7 @@ def d_desired_velocity(state, target_vel, fail=False, edge_list=None):
         reward value
     """
     # print(state)
+    state = torch.Tensor(state)
     vel = state.clone()[1::2]
     num_vehicles = int(state.size(0)) // 2
 
