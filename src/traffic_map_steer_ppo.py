@@ -51,7 +51,7 @@ def visualize(batch, out, between, out_steer, out_accel, loss_point, loss_cmd, t
         _out_accel = out_accel[i] if out_accel is not None else [-1]
         _between = between[i] if between is not None else [-1]
 
-        rgb, topdown, points, target, actions, meta, _, _, _ = [x[i] for x in batch]
+        rgb, topdown, _, points, target, actions, meta, _, _, _ = [x[i] for x in batch]
 
         _rgb = np.uint8(rgb.detach().cpu().numpy().transpose(1, 2, 0) * 255)
         _target_heatmap = np.uint8(target_heatmap[i].detach().squeeze().cpu().numpy() * 255)
@@ -85,8 +85,8 @@ def visualize(batch, out, between, out_steer, out_accel, loss_point, loss_cmd, t
         _draw.text((5, 50), 'Meta: %s' % meta)
 
         _draw.text((5, 90), 'Steer, Accel Label: %.3f %.3f' % tuple(actions))
-        _draw.text((5, 110), 'Steer Pred: %.3f' % tuple(_out_steer))
-        _draw.text((5, 130), 'Accel Pred: %.3f' % tuple(_out_accel))
+        _draw.text((5, 110), 'Steer Pred: %.3f' % _out_steer)
+        _draw.text((5, 130), 'Accel Pred: %.3f' % _out_accel)
 
         image = np.array(_topdown).transpose(2, 0, 1)
         images.append((_loss_cmd, torch.ByteTensor(image)))
@@ -129,19 +129,19 @@ class TrafficMapModelSteer(pl.LightningModule):
         return out, (target_heatmap,)
 
     def training_step(self, batch, batch_nb): # img never used in map model
-        img, topdown, points, target, actions, meta, traffic_state, player_ind, num_veh = batch
-        steer_actions = actions[:,0]
-        speeds = actions[:,1]
+        img, topdown, topdown_raw, points, target, actions, meta, traffic_state, player_ind, num_veh = batch
+        steer_actions = actions[:,0:1]
+        speeds = actions[:,1].unsqueeze(1)
 
         observation = {
-            'topdown': topdown, 
+            'topdown': topdown_raw, 
             'traffic_state': traffic_state
         }
 
         out, (target_heatmap,) = self.forward(topdown, target, debug=True) # Generate waypoints 
-        accel, _ = self.accel_controller(observation, deterministic=True)
-        target_speeds = torch.add(speeds, accel) 
-        new_actions = torch.cat(steer_actions, target_speeds, dim=1)
+        accel, _, _ = self.accel_controller(observation, deterministic=True)
+        target_speeds = torch.add(speeds, accel)
+        new_actions = torch.cat((steer_actions, target_speeds), dim=1)
         
         alpha = torch.rand(out.shape).type_as(out)
         between = alpha * out + (1-alpha) * points # Interpolate between predicted waypoints and ground truth waypoints
@@ -167,19 +167,19 @@ class TrafficMapModelSteer(pl.LightningModule):
         return {'loss': loss}
 
     def validation_step(self, batch, batch_nb):
-        img, topdown, points, target, actions, meta, traffic_state, player_ind, num_veh = batch
-        steer_actions = actions[:,0]
-        speeds = actions[:,1]
+        img, topdown, topdown_raw, points, target, actions, meta, traffic_state, player_ind, num_veh = batch
+        steer_actions = actions[:,0:1]
+        speeds = actions[:,1].unsqueeze(1)
 
         observation = {
-            'topdown': topdown, 
+            'topdown': topdown_raw, 
             'traffic_state': traffic_state
         }
 
         out, (target_heatmap,) = self.forward(topdown, target, debug=True)
-        accel, _ = self.accel_controller(observation, deterministic=True)
-        target_speeds = torch.add(speeds, accel) 
-        new_actions = torch.cat(steer_actions, target_speeds, dim=1)
+        accel, _, _ = self.accel_controller(observation, deterministic=True)
+        target_speeds = torch.add(speeds, accel)
+        new_actions = torch.cat((steer_actions, target_speeds), dim=1)
 
         alpha = 0.0
         between = alpha * out + (1-alpha) * points

@@ -301,6 +301,7 @@ class TrafficCarlaDataset(Dataset):
         rgb_right = transforms.functional.to_tensor(rgb_right)
 
         topdown = Image.open(path / 'topdown' / ('%s.png' % frame))
+        topdown_raw = np.array(topdown)
         topdown = topdown.crop((128, 0, 128 + 256, 256))
         topdown = np.array(topdown)
         topdown = preprocess_semantic(topdown)
@@ -361,7 +362,7 @@ class TrafficCarlaDataset(Dataset):
         actions[np.isnan(actions)] = 0.0
         actions = torch.FloatTensor(actions)
 
-        return torch.cat((rgb, rgb_left, rgb_right)), topdown, points, target, actions, meta, traffic_state, ind_of_player, num_veh
+        return torch.cat((rgb, rgb_left, rgb_right)), topdown, topdown_raw, points, target, actions, meta, traffic_state, ind_of_player, num_veh
 
 
 if __name__ == '__main__':
