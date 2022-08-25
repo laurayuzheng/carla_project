@@ -12,7 +12,7 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from PIL import Image, ImageDraw
 
-from .models import SegmentationModel, RawController
+from .models import SegmentationModel, RawController, AccelAgentNetwork
 from .utils.heatmap import ToHeatmap
 from .dataset import get_dataset
 from .converter import Converter
@@ -27,6 +27,16 @@ import torch
 from torch import det
 import numpy as np
 from FLOW_CONFIG import *
+from stable_baselines3 import PPO
+
+from stable_baselines3.common.torch_layers import (
+    BaseFeaturesExtractor,
+    CombinedExtractor,
+    FlattenExtractor,
+    MlpExtractor,
+    NatureCNN,
+    create_mlp,
+)
 
 @torch.no_grad()
 def visualize(batch, out, between, out_steer, out_accel, loss_point, loss_cmd, target_heatmap):
@@ -98,9 +108,16 @@ class TrafficMapModelSteer(pl.LightningModule):
 
         self.to_heatmap = ToHeatmap(hparams.heatmap_radius)
         self.net = SegmentationModel(10, 4, hack=hparams.hack, temperature=hparams.temperature)
-        self.controller = RawController(4)
+        self.controller = RawController(4, n_classes=2)
         self.converter = Converter()
         self.step_layer = IDMStepLayer.apply
+
+        # self.accel_controller = PPO.load(hparams.accel_model_path)
+        # self.accel_controller.to("cpu")
+
+        model = PPO.load(hparams.accel_model_path)
+        self.accel_controller = model.policy
+        # self.accel_controller = AccelAgentNetwork(model.policy.features_extractor, model.policy.net_arch, model.policy.action_net, model.policy.value_net)
 
     def forward(self, topdown, target, debug=False):
         target_heatmap = self.to_heatmap(target, topdown)[:, None]
@@ -113,16 +130,25 @@ class TrafficMapModelSteer(pl.LightningModule):
 
     def training_step(self, batch, batch_nb): # img never used in map model
         img, topdown, points, target, actions, meta, traffic_state, player_ind, num_veh = batch
-        steer_actions = actions[:,0:1]
+        steer_actions = actions[:,0]
+        speeds = actions[:,1]
 
-        out, (target_heatmap,) = self.forward(topdown, target, debug=True)
+        observation = {
+            'topdown': topdown, 
+            'traffic_state': traffic_state
+        }
+
+        out, (target_heatmap,) = self.forward(topdown, target, debug=True) # Generate waypoints 
+        accel, _ = self.accel_controller(observation, deterministic=True)
+        target_speeds = torch.add(speeds, accel) 
+        new_actions = torch.cat(steer_actions, target_speeds, dim=1)
         
         alpha = torch.rand(out.shape).type_as(out)
         between = alpha * out + (1-alpha) * points # Interpolate between predicted waypoints and ground truth waypoints
-        out_steer = self.controller(between)        
+        out_ctrl = self.controller(between)        
 
         loss_point = torch.nn.functional.l1_loss(out, points, reduction='none').mean((1, 2))
-        loss_cmd_raw = torch.nn.functional.l1_loss(out_steer, steer_actions, reduction='none')
+        loss_cmd_raw = torch.nn.functional.l1_loss(out_ctrl, new_actions, reduction='none')
 
         loss_cmd = loss_cmd_raw.mean(1)
         loss = (loss_point + self.hparams.command_coefficient * loss_cmd).mean()
@@ -130,11 +156,11 @@ class TrafficMapModelSteer(pl.LightningModule):
         metrics = {
                 'loss': loss.item(),
                 'point_loss': loss_point.mean().item(),
-                'loss_steer': loss_cmd.mean().item(),
+                'loss_cmd': loss_cmd.mean().item(),
                 }
 
         if batch_nb % 250 == 0:
-            metrics['train_image'] = visualize(batch, out, between, out_steer, None, loss_point, loss_cmd, target_heatmap)
+            metrics['train_image'] = visualize(batch, out, between, out_ctrl[:,0], out_ctrl[:,1], loss_point, loss_cmd, target_heatmap)
 
         self.logger.log_metrics(metrics, self.global_step)
 
@@ -142,34 +168,42 @@ class TrafficMapModelSteer(pl.LightningModule):
 
     def validation_step(self, batch, batch_nb):
         img, topdown, points, target, actions, meta, traffic_state, player_ind, num_veh = batch
-        steer_actions = actions[:,0:1]
-        # current_speed = actions[:,1]
+        steer_actions = actions[:,0]
+        speeds = actions[:,1]
+
+        observation = {
+            'topdown': topdown, 
+            'traffic_state': traffic_state
+        }
 
         out, (target_heatmap,) = self.forward(topdown, target, debug=True)
+        accel, _ = self.accel_controller(observation, deterministic=True)
+        target_speeds = torch.add(speeds, accel) 
+        new_actions = torch.cat(steer_actions, target_speeds, dim=1)
 
         alpha = 0.0
         between = alpha * out + (1-alpha) * points
 
-        out_steer = self.controller(between)
-        out_steer_pred = self.controller(out)
+        out_cmd = self.controller(between)
+        out_cmd_pred = self.controller(out)
 
         loss_point = torch.nn.functional.l1_loss(out, points, reduction='none').mean((1, 2))
-        loss_cmd_raw = torch.nn.functional.l1_loss(out_steer, steer_actions, reduction='none')
-        loss_cmd_pred_raw = torch.nn.functional.l1_loss(out_steer_pred, steer_actions, reduction='none')
+        loss_cmd_raw = torch.nn.functional.l1_loss(out_cmd, new_actions, reduction='none')
+        loss_cmd_pred_raw = torch.nn.functional.l1_loss(out_cmd_pred, new_actions, reduction='none')
 
         loss_cmd = loss_cmd_raw.mean(1)
         loss = (loss_point + self.hparams.command_coefficient * loss_cmd).mean()
 
         if batch_nb == 0:
             self.logger.log_metrics({
-                'val_image': visualize(batch, out, between, out_steer, None, loss_point, loss_cmd, target_heatmap)
+                'val_image': visualize(batch, out, between, out_cmd_pred[:,0], out_cmd_pred[:,1], loss_point, loss_cmd, target_heatmap)
                 }, self.global_step)
 
         return {
                 'val_loss': loss.item(),
                 'val_point_loss': loss_point.mean().item(),
-                'val_steer_loss': loss_cmd.mean().item(),
-                'val_steer_pred_loss': loss_cmd_pred_raw[:, 0].mean().item(), 
+                'val_cmd_loss': loss_cmd.mean().item(),
+                'val_cmd_pred_loss': loss_cmd_pred_raw[:, 0].mean().item(), 
                 }
 
     def validation_epoch_end(self, batch_metrics):
@@ -206,7 +240,7 @@ class TrafficMapModelSteer(pl.LightningModule):
 
 def main(hparams):
     model = TrafficMapModelSteer(hparams)
-    logger = WandbLogger(id=hparams.id, save_dir=str(hparams.save_dir), project='mapmodel_steer')
+    logger = WandbLogger(id=hparams.id, save_dir=str(hparams.save_dir), project='ppo_mapmodel')
     checkpoint_callback = ModelCheckpoint(hparams.save_dir, save_top_k=1)
 
     try:
@@ -240,7 +274,8 @@ if __name__ == '__main__':
 
     # Data args.
     parser.add_argument('--dataset_dir', type=pathlib.Path, required=True)
-    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--accel_model_path', type=pathlib.Path, default="models/accel_agent")
+    parser.add_argument('--batch_size', type=int, default=64)
 
     # Optimizer args.
     parser.add_argument('--lr', type=float, default=1e-4)

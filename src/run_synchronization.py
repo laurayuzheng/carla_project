@@ -76,10 +76,10 @@ class SimulationSynchronization(object):
         self.sync_vehicle_color = sync_vehicle_color
         self.sync_vehicle_lights = sync_vehicle_lights
 
-        if tls_manager == 'carla':
-            self.sumo.switch_off_traffic_lights()
-        elif tls_manager == 'sumo':
-            self.carla.switch_off_traffic_lights()
+        # if tls_manager == 'carla':
+        #     self.sumo.switch_off_traffic_lights()
+        # elif tls_manager == 'sumo':
+        #     self.carla.switch_off_traffic_lights()
 
         # Mapped actor ids.
         self.sumo2carla_ids = {}  # Contains only actors controlled by sumo. Indexed by SUMO ids. 
@@ -250,11 +250,17 @@ class SimulationSynchronization(object):
         self.carla.world.apply_settings(settings)
 
         # Destroying synchronized actors.
-        for carla_actor_id in self.sumo2carla_ids.values():
-            self.carla.destroy_actor(carla_actor_id)
-
-        for sumo_actor_id in self.carla2sumo_ids.values():
-            self.sumo.destroy_actor(sumo_actor_id)
+        # try:
+        #     for carla_actor_id in self.sumo2carla_ids.values():
+        #         self.carla.destroy_actor(carla_actor_id)
+        # except: 
+        #     pass
+        
+        # try:
+        #     for sumo_actor_id in self.carla2sumo_ids.values():
+        #         self.sumo.destroy_actor(sumo_actor_id)
+        # except: 
+        #     pass
 
         # Closing sumo and carla client.
         self.carla.close()
@@ -264,11 +270,11 @@ class SimulationSynchronization(object):
         """ 
             Reset function (without closing connections)
         """
-        for carla_actor_id in self.sumo2carla_ids.values():
-            self.carla.destroy_actor(carla_actor_id)
+        # for carla_actor_id in self.sumo2carla_ids.values():
+        #     self.carla.destroy_actor(carla_actor_id)
 
-        for sumo_actor_id in self.carla2sumo_ids.values():
-            self.sumo.destroy_actor(sumo_actor_id)
+        # for sumo_actor_id in self.carla2sumo_ids.values():
+        #     self.sumo.destroy_actor(sumo_actor_id)
 
         self.sumo2carla_ids = {} 
         self.carla2sumo_ids = {}

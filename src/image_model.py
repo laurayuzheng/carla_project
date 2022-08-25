@@ -102,7 +102,7 @@ class ImageModel(pl.LightningModule):
 
         self.net = SegmentationModel(10, 4, hack=hparams.hack, temperature=hparams.temperature)
         self.converter = Converter()
-        self.controller = RawController(4)
+        self.controller = RawController(4, n_classes=2)
 
     def forward(self, img, target):
         target_cam = self.converter.map_to_cam(target)

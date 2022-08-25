@@ -1,8 +1,30 @@
 import torch
 import torch.nn.functional as F
+import stable_baselines3 as sb3
+from stable_baselines3.common.preprocessing import preprocess_obs
+from gym import spaces
 
 from torchvision.models.segmentation import deeplabv3_resnet50
 
+# action, _states = model.predict(obs, deterministic=True)
+class AccelAgentNetwork(torch.nn.Module):
+  def __init__(self, extractor, mlp_policy, action_net, value_net):
+      super(AccelAgentNetwork, self).__init__()
+      self.extractor = extractor
+      self.mlp = mlp_policy
+      self.action_net = action_net
+      self.value_net = value_net
+
+  def forward(self, observation):
+    #   observation = preprocess_obs(obs=observation,
+    #                             observation_space=spaces.Dict,
+    #                             normalize_images=True)
+    # preprocessed_obs = {}
+    # for key, _obs in observation.items():
+    #     preprocessed_obs[key] = preprocess_obs(_obs, spaces.Box, normalize_images=True)
+    features = self.extractor(observation)
+    action_hidden, value_hidden = self.mlp(features)
+    return self.action_net(action_hidden), self.value_net(value_hidden)
 
 class RawController(torch.nn.Module):
     def __init__(self, n_input=4, k=32, n_classes=1):

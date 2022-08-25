@@ -82,7 +82,7 @@ def get_dataset(dataset_dir, is_train=True, batch_size=128, num_workers=4, sampl
         transforms.ToTensor()
         ])
 
-    episodes = list(sorted(Path(dataset_dir).glob('*')))
+    episodes = [dir for dir in list(sorted(Path(dataset_dir).glob('*'))) if os.path.isdir(dir)]
 
     for i, _dataset_dir in enumerate(episodes):
         add = False

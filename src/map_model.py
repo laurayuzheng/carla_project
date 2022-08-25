@@ -84,7 +84,7 @@ class MapModel(pl.LightningModule):
 
         self.to_heatmap = ToHeatmap(hparams.heatmap_radius)
         self.net = SegmentationModel(10, 4, hack=hparams.hack, temperature=hparams.temperature)
-        self.controller = RawController(4)
+        self.controller = RawController(4, n_classes=2)
 
     def forward(self, topdown, target, debug=False):
         target_heatmap = self.to_heatmap(target, topdown)[:, None]
